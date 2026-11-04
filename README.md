@@ -16,16 +16,22 @@ harness-evolve 是一个极简的 harness 改进循环。
 2. 按[规范](SPEC.md)提供初始 harness 文件夹和 `eval.py`：
    1. 初始 harness 文件夹：包含所有待优化的 harness 代码。
    2. 评测脚本：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
-3. 运行 `evolve.py`：先评测初始版本 v0.0，然后循环：
+3. 运行 `evolve.py`：
 
    ```
-   for 每一轮（最多 5 轮）:
-       for 本轮的每次尝试（最多 3 次）:
-           1. proposer 阅读以前各次尝试的记录和当前版本在训练集上的轨迹，修改 harness（只采纳 harness 文件夹内的改动）
-           2. 训练集检查：重新运行 proposer 列出的错题，一道都没变对，撤销，再试一次
-           3. 验证集检查：验证集上的正确率没有显著高于当前版本，撤销，再试一次
-           4. 两项都通过：保留修改，作为新的当前版本；在整个训练集上运行它，供下一轮分析；进入下一轮
-       如果本轮所有尝试都没有通过，停止
+   输入：初始 harness H，训练集 T，验证集 V，proposer P
+   初始化：在 T 和 V 上评测 H
+
+   for 轮次 k = 1 … 5:
+       for 尝试 j = 0 … 2:                                 ▷ 版本号 vk.j
+           P 读取历史记录和 H 在 T 上的轨迹
+           P 修改 H 得到 H′，并列出 targets                ▷ targets：预期能修好的训练集错题
+           if H′ 在 targets 上没有一道题变对: continue     ▷ 训练集检查
+           if H′ 在 V 上没有显著优于 H: continue           ▷ 验证集检查
+           H ← H′，在 T 上评测 H                           ▷ 保留修改，供下一轮分析
+           break
+       if 本轮没有保留修改: break
+   return H
    ```
 
 4. 在测试集上比较最终的当前版本和 v0.0。
