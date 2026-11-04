@@ -1,34 +1,28 @@
 # 接入规范
 
-接入一个新任务，需要提供三样东西：评测数据集的划分、初始 harness 文件夹和评测脚本 `eval.py`。
+接入一个新任务，需要提供评测数据集、初始 harness 文件夹、评测脚本和配置 `evolve.json`，可以另外提供候选检查脚本和任务说明。
 
 ```
 project/
 ├── harness/        初始 harness 文件夹：所有待优化的 harness 代码
 ├── eval.py         评测脚本
+├── evolve.json     配置
 ├── data/           评测数据集
-└── .gitignore      包含 data/、runs/
+├── check.py        候选检查脚本（可选）
+└── task.md         任务说明（可选）
 ```
 
 ## 评测数据集
 
-划分为 train、val、test 三份，由 `eval.py` 按 `--split` 读取。来源相同的题（例如同一个视频的多道题）放在同一份里，避免信息从训练集泄露到验证集。
-
-数据集不提交到 git，否则 proposer 可以通过 git 历史看到验证集和测试集。
-
-示例 `data/splits.json`：
-
-```json
-{"train": ["q001", "q002", "..."], "val": ["q101", "..."], "test": ["q201", "..."]}
-```
+划分为 train、val、test 三份，由评测脚本按 `--split` 读取。来源相同的题（例如同一个视频的多道题）放在同一份里，避免信息从训练集泄露到验证集。
 
 ## harness 文件夹
 
-- 包含所有待优化的 harness 代码：system prompt、工具、上下文管理等。proposer 只能修改这个文件夹内的文件。
-- 对外提供一个固定的入口，供 `eval.py` 调用。proposer 不能改变入口的参数和返回格式。
-- 模型和推理参数（温度、reasoning effort 等）由 `eval.py` 设定，通过入口传给 harness，harness 不能修改。token 用量、步数和超时由 harness 自己决定，只做记录。
-- 评测脚本和数据集不放在这个文件夹里。
-- 运行时生成的文件（例如 `__pycache__/`、缓存）加入 `.gitignore`，否则会被当作 harness 的改动提交。
+- 包含所有待优化的 harness 代码：system prompt、工具、上下文管理等。
+- 每个版本都是这个文件夹的一份副本，放在 `runs/candidates/<版本>/` 中。harness 读取自己的文件时，要按自身位置定位（例如 `Path(__file__).parent`），不能按工作目录定位，否则读到的是初始版本。
+- 对外提供一个固定的入口，供评测脚本调用。proposer 不能改变入口的参数和返回格式。
+- 模型和推理参数（温度、reasoning effort 等）由评测脚本设定，通过入口传给 harness，harness 不能修改。token 用量、步数和超时由 harness 自己决定，只做记录。
+- 评测时，harness 代码在宿主机上运行，不受沙箱限制。需要限制修改范围时（例如只允许改 prompt），用候选检查脚本检查。
 
 示例：
 
@@ -43,22 +37,22 @@ harness/
 
 ## 评测脚本
 
-调用方式：
+评测脚本在指定的 split 上评测指定的 harness，写出得分文件和轨迹。命令在 `evolve.json` 的 `eval` 中给出，可以带任意自己的参数，其中这些占位符会被替换：
 
-```
-python eval.py --split train --scores runs/train/v0.0/scores.jsonl --trajectory runs/train/v0.0/trajectory [--qids q001,q002]
-```
+| 占位符 | 含义 |
+|---|---|
+| `{harness}` | 要评测的 harness 文件夹 |
+| `{split}` | train、val 或 test |
+| `{scores}` | 得分文件，每行一道题 |
+| `{trajectory}` | 轨迹目录，每道题一个文件，文件名为题号，例如 `q001.json` |
 
-- `--split`：train、val 或 test。
-- `--scores`：得分文件，每行一道题。
-- `--trajectory`：轨迹目录，每道题一个轨迹文件，文件名为题号，例如 `q001.json`。
-- `--qids`：可选，逗号分隔的题号，只运行这些题。
+只运行部分题时，命令后面会追加 `--qids q001,q002`。
 
 得分文件每行的字段：
 
 | 字段 | 含义 |
 |---|---|
-| `qid` | 题号 |
+| `qid` | 题号，字符串，不重复 |
 | `correct` | 是否答对，0 或 1 |
 | `tokens` | 这道题消耗的 token 数 |
 | `steps` | agent 运行的步数 |
@@ -69,25 +63,29 @@ python eval.py --split train --scores runs/train/v0.0/scores.jsonl --trajectory 
 {"qid": "q001", "correct": 1, "tokens": 5230, "steps": 7}
 ```
 
-轨迹文件要包含 proposer 分析错误所需的全部信息：题目、标准答案、agent 的完整消息和工具调用、最终答案。
-
-harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。只有评测脚本自身出错时才以非零状态退出，此时 `evolve.py` 会停止。
+- 轨迹文件要包含 proposer 分析错误所需的全部信息：题目、标准答案、agent 的完整消息和工具调用、最终答案。
+- 不要把标准答案传给 harness。
+- harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。只有评测脚本自身出错时才以非零状态退出，此时 `evolve.py` 会停止。
+- 中断后重新运行时，同一次评测传入的路径不变。评测脚本可以利用轨迹目录中已有的逐题结果，只补跑没有完成的题。
 
 示例 `eval.py`：
 
 ```python
 import argparse
 import json
+import sys
 import traceback
 from pathlib import Path
 
 ap = argparse.ArgumentParser()
+ap.add_argument("--harness", required=True)
 ap.add_argument("--split", choices=["train", "val", "test"], required=True)
 ap.add_argument("--scores", required=True)
 ap.add_argument("--trajectory", required=True)
 ap.add_argument("--qids")
 args = ap.parse_args()
 
+sys.path.insert(0, str(Path(args.harness).resolve().parent))  # 从指定的 harness 副本导入
 llm = make_llm(model="claude-opus-4-6", temperature=0)  # 你自己的 LLM 客户端：模型和推理参数固定在这里
 
 qids = set(json.load(open("data/splits.json"))[args.split])
@@ -111,3 +109,39 @@ with open(args.scores, "w") as f:
         (traj_dir / f"{q['qid']}.json").write_text(json.dumps(traj, ensure_ascii=False, indent=2))
 ```
 
+## 候选检查脚本（可选）
+
+proposer 修改完成后、评测之前运行，用来检查修改范围或运行离线测试。占位符 `{harness}` 是候选版本，`{base}` 是它所基于的当前版本。以非零状态退出表示不通过，输出的最后几行会作为原因记录。
+
+## 任务说明（可选）
+
+追加在 `proposer.md` 后面，一起交给 proposer。用来说明任务本身、harness 各部分的作用、轨迹怎么看，以及额外的修改限制。
+
+## evolve.json
+
+| 键 | 含义 | 默认值 |
+|---|---|---|
+| `harness` | 初始 harness 文件夹 | `"harness"` |
+| `eval` | 评测命令，参数数组 | 必填 |
+| `check` | 候选检查命令，参数数组 | 不检查 |
+| `task` | 任务说明文件 | 无 |
+| `protocol` | 决定评测结果的文件，例如评测脚本、数据划分、模型配置 | `[]` |
+| `proposer` | proposer 命令，参数数组，最后会追加 prompt | 在容器中运行 pi，见 `evolve.py` |
+| `alpha` | 显著性水平 | `0.05` |
+| `max_rounds` | 最多轮数 K | `5` |
+| `max_tries` | 每轮最多尝试次数 J | `3` |
+
+示例：
+
+```json
+{
+  "harness": "harness",
+  "eval": ["python", "eval.py", "--harness", "{harness}", "--split", "{split}",
+           "--scores", "{scores}", "--trajectory", "{trajectory}"],
+  "check": ["python", "check.py", "{harness}", "{base}"],
+  "task": "task.md",
+  "protocol": ["eval.py", "data/splits.json"]
+}
+```
+
+`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。

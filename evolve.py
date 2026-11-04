@@ -1,8 +1,10 @@
-"""harness-evolve：让 pi 修改 harness，只保留在验证集上显著变好的修改。
+"""harness-evolve：让 proposer 修改 harness，只保留在验证集上显著变好的修改。
 
-在被优化的项目根目录运行：python <harness-evolve 目录>/evolve.py
-中途停止后再次运行，会丢弃没有完成的那次尝试，从它重新开始。
+在项目根目录运行，配置读取 evolve.json（见 SPEC.md）：
+  python <harness-evolve 目录>/evolve.py          运行优化；中途停止后再次运行，已完成的步骤不会重做
+  python <harness-evolve 目录>/evolve.py final    在测试集上比较初始版本和当前版本；之后不能再继续优化
 """
+import hashlib
 import json
 import math
 import os
@@ -11,58 +13,68 @@ import subprocess
 import sys
 from pathlib import Path
 
-# ---------- 配置 ----------
-HARNESS = "harness/"  # harness 文件夹，只采纳其中的改动（规范见 SPEC.md）
-EVAL = "python eval.py --split {split} --scores {scores} --trajectory {trajectory}"  # 评测脚本（规范见 SPEC.md）
-EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
-# proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
-# {project}、{harness}、{new}、{user} 会替换为项目路径、harness 文件夹、本次版本号和当前用户
-PROPOSER = ["docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
-            "-v", "{project}:/workspace:ro",                                 # 项目只读
-            "-v", "{project}/{harness}:/workspace/{harness}",                # harness 可写
-            "-v", "{project}/runs/train/{new}:/workspace/runs/train/{new}",  # 写出 proposal.json
-            "--tmpfs", "/workspace/runs/val",                                # 遮住验证集上的记录
-            "--tmpfs", "/workspace/data",                                    # 遮住数据集；数据集不在项目内时删掉这一行
-            "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
-ALPHA = 0.05        # 显著性水平
-MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
-MAX_TRIES = 3       # 每轮最多尝试次数：一轮都没有通过，停止
-# --------------------------
+DEFAULTS = {
+    "harness": "harness",  # 初始 harness 文件夹
+    "eval": None,          # 评测命令，必填
+    "check": None,         # 候选检查命令，可选
+    "task": None,          # 追加给 proposer 的任务说明文件，可选
+    "protocol": [],        # 决定评测结果的文件，例如评测脚本、数据划分、模型配置
+    "proposer": [          # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
+        "docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
+        "-v", "{runs}/history.jsonl:/workspace/runs/history.jsonl:ro",
+        "-v", "{runs}/candidates:/workspace/runs/candidates:ro",
+        "-v", "{runs}/candidates/{new}:/workspace/runs/candidates/{new}",
+        "-v", "{runs}/train:/workspace/runs/train:ro",
+        "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p",
+    ],
+    "alpha": 0.05,         # 显著性水平
+    "max_rounds": 5,       # 最多轮数：每保留一次修改，进入下一轮
+    "max_tries": 3,        # 每轮最多尝试次数：一轮都没有通过，停止
+}
 
-RUNS = Path("runs")  # runs/train/ 给 proposer 看；runs/val/ 是验证集上的记录，不给 proposer 看
+RUNS = Path("runs")
 HISTORY = RUNS / "history.jsonl"
 PROMPT = Path(__file__).with_name("proposer.md")
+ENV = os.environ | {"PYTHONDONTWRITEBYTECODE": "1"}  # 不在 harness 副本中生成 __pycache__
+CFG = {}
 
 
-def git(*args):
-    return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
+def fill(template, **values):
+    return [str(arg).format(**values) for arg in template]
 
 
-def checkout(version):
-    """分支指向 version，受 git 管理的文件和 harness 文件夹都恢复为 version 的状态。"""
-    git("reset", "-q", "--hard", version)
-    git("clean", "-fdq", "--", HARNESS)
+def harness_dir(version):
+    return RUNS / "candidates" / version / Path(CFG["harness"]).name
 
 
 def result_dir(version, name):
-    """评测结果的目录：targets 在 runs/train/<版本>/targets/，train 和 val 在 runs/<train 或 val>/<版本>/。"""
+    """targets 的结果在 train/<版本>/targets/，train、val、test 的结果在 <name>/<版本>/。"""
     return RUNS / "train" / version / "targets" if name == "targets" else RUNS / name / version
 
 
-def evaluate(version, name, split, qids=None):
-    """运行评测，得分写入 <结果目录>/scores.jsonl，轨迹写入 <结果目录>/trajectory/。"""
-    d = result_dir(version, name)
-    out, tmp = d / "scores.jsonl", d / "scores.tmp"
-    d.mkdir(parents=True, exist_ok=True)
-    cmd = EVAL.format(split=split, scores=tmp, trajectory=d / "trajectory")
-    subprocess.run(cmd + (EVAL_QIDS.format(qids=",".join(qids)) if qids else ""), shell=True, check=True)
-    tmp.replace(out)  # 评测完整结束才生成得分文件，中途停止不会留下不完整的结果
-    return scores(version, name)
+def read_scores(path):
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    scores = {r["qid"]: r for r in rows}
+    if len(scores) != len(rows) or not all(isinstance(q, str) and r["correct"] in (0, 1) for q, r in scores.items()):
+        sys.exit(f"{path} 格式不对：题号要是不重复的字符串，correct 要是 0 或 1")
+    return scores
 
 
 def scores(version, name):
-    with open(result_dir(version, name) / "scores.jsonl", encoding="utf-8") as f:
-        return {r["qid"]: r for r in map(json.loads, filter(str.strip, f))}
+    return read_scores(result_dir(version, name) / "scores.jsonl")
+
+
+def evaluate(version, name, split, qids=None):
+    """评测 version 的 harness；结果已经存在时直接读取。"""
+    d = result_dir(version, name)
+    out, tmp = d / "scores.jsonl", d / "scores.tmp"
+    if not out.exists():
+        d.mkdir(parents=True, exist_ok=True)
+        cmd = fill(CFG["eval"], harness=harness_dir(version), split=split, scores=tmp, trajectory=d / "trajectory")
+        subprocess.run(cmd + (["--qids", ",".join(qids)] if qids else []), check=True, env=ENV)
+        read_scores(tmp)  # 格式正确才作为完整结果保存
+        tmp.replace(out)
+    return scores(version, name)
 
 
 def mean(rows, key):
@@ -76,105 +88,142 @@ def mcnemar_p(fixed, broken):
     return sum(math.comb(n, i) for i in range(fixed, n + 1)) / 2 ** n if n else 1.0
 
 
+def compare(before, after):
+    """在同一组题上逐题比较两个版本。"""
+    if before.keys() != after.keys():
+        sys.exit("两个版本评测的题目不一致")
+    fixed = sum(before[q]["correct"] == 0 and after[q]["correct"] == 1 for q in before)
+    broken = sum(before[q]["correct"] == 1 and after[q]["correct"] == 0 for q in before)
+    p = mcnemar_p(fixed, broken)
+    result = {"pass": p < CFG["alpha"], "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
+    for name, rows in (("before", before), ("after", after)):
+        rows = list(rows.values())
+        result[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
+                        "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
+    return result
+
+
+def same_tree(a, b):
+    files = lambda d: {p.relative_to(d): p.read_bytes() for p in d.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
+    return files(a) == files(b)
+
+
+def protocol():
+    """评测协议的指纹：评测命令和 protocol 中各文件的内容。"""
+    h = hashlib.sha256(json.dumps(CFG["eval"]).encode())
+    for f in CFG["protocol"]:
+        h.update(f.encode() + Path(f).read_bytes())
+    return h.hexdigest()
+
+
 def rejected(reason):
     return {"result": "rejected", "reason": reason}
 
 
-def attempt(branch, current, new):
-    # 0. 从当前版本开始；丢弃上次没有完成的同一次尝试
-    d, vd = RUNS / "train" / new, RUNS / "val" / new
-    shutil.rmtree(d, ignore_errors=True)
-    shutil.rmtree(vd, ignore_errors=True)
-    subprocess.run(["git", "tag", "-d", new], capture_output=True)
-    checkout(current)
-    d.mkdir(parents=True)
+def attempt(current, new):
+    cand = RUNS / "candidates" / new
 
-    # 1. proposer 修改 harness
-    prompt = PROMPT.read_text(encoding="utf-8")
-    for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
-        prompt = prompt.replace(k, v)
-    with open(d / "proposer.jsonl", "w", encoding="utf-8") as f:
-        cmd = [a.format(project=Path.cwd(), harness=HARNESS, new=new, user=f"{os.getuid()}:{os.getgid()}") for a in PROPOSER]
-        subprocess.run(cmd + [prompt], stdout=f, check=True)
-    git("symbolic-ref", "HEAD", f"refs/heads/{branch}")  # proposer 切换过分支时，指回原分支
-    git("reset", "-q", "--soft", current)                # proposer 自己提交过时，合并成一次改动
-    git("restore", "--source", current, "--staged", "--worktree", "--", ".", f":!{HARNESS}")  # 丢弃 harness 以外的改动
-    git("add", "-A", "--", HARNESS)
-    if not git("diff", "--cached", "--name-only"):
+    # 1. proposer 在当前版本的副本上修改 harness；proposer.jsonl 存在表示这一步已完成
+    if not (cand / "proposer.jsonl").exists():
+        for d in (cand, result_dir(new, "train"), result_dir(new, "val")):
+            shutil.rmtree(d, ignore_errors=True)
+        shutil.copytree(harness_dir(current), harness_dir(new))
+        prompt = PROMPT.read_text(encoding="utf-8")
+        if CFG["task"]:
+            prompt += "\n\n" + Path(CFG["task"]).read_text(encoding="utf-8")
+        for k, v in {"{current}": current, "{new}": new, "{name}": Path(CFG["harness"]).name}.items():
+            prompt = prompt.replace(k, v)
+        user = f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "0:0"
+        with open(cand / "proposer.tmp", "w", encoding="utf-8") as f:
+            subprocess.run(fill(CFG["proposer"], runs=RUNS.resolve(), new=new, user=user) + [prompt], stdout=f, check=True)
+        (cand / "proposer.tmp").replace(cand / "proposer.jsonl")
+
+    # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本在训练集上的错题
+    if same_tree(harness_dir(current), harness_dir(new)):
         return rejected("没有修改 harness")
     try:
-        proposal = json.loads((d / "proposal.json").read_text(encoding="utf-8"))
+        proposal = json.loads((cand / "proposal.json").read_text(encoding="utf-8"))
         entry = {"problem": proposal["problem"], "change": proposal["change"]}
-        targets = [str(q) for q in proposal["targets"]]
-        if not targets:
-            raise ValueError
+        targets = sorted(set(proposal["targets"]))
     except (OSError, ValueError, KeyError, TypeError):
         return rejected("proposal.json 缺失或格式不对")
-    git("commit", "-qm", f"{new}: {entry['change']}")
-    git("tag", new)
+    wrong = {q for q, r in scores(current, "train").items() if r["correct"] == 0}
+    if not targets or not set(targets) <= wrong:
+        return entry | rejected("targets 要是当前版本在训练集上答错的题号")
+    if CFG["check"]:
+        r = subprocess.run(fill(CFG["check"], harness=harness_dir(new), base=harness_dir(current)),
+                           capture_output=True, text=True, env=ENV)
+        if r.returncode != 0:
+            return entry | rejected("候选检查未通过：" + (r.stdout + r.stderr).strip()[-300:])
 
-    # 2. 训练集检查：targets 中至少一道错题变对
-    before = scores(current, "train")
+    # 3. 训练集检查：targets 中至少一道题变对
     after = evaluate(new, "targets", "train", targets)
-    fixed = sum(1 for q in targets if before.get(q, {}).get("correct") == 0 and after.get(q, {}).get("correct") == 1)
-    (d / "check.json").write_text(json.dumps({"pass": fixed > 0, "fixed": fixed}, indent=2), encoding="utf-8")
+    fixed = sum(after.get(q, {}).get("correct") == 1 for q in targets)
+    (result_dir(new, "train") / "check.json").write_text(json.dumps({"pass": fixed > 0, "fixed": fixed}, indent=2))
     if fixed == 0:
         return entry | rejected("训练集检查未通过：targets 中没有一道题变对")
 
-    # 3. 验证集检查：正确率显著高于当前版本
-    before = scores(current, "val")
-    after = evaluate(new, "val", "val")
-    missing = before.keys() - after.keys()
-    if missing:
-        sys.exit(f"{new} 的验证集结果缺少 {len(missing)} 道题")
-    fixed = sum(1 for q in before if before[q]["correct"] == 0 and after[q]["correct"] == 1)
-    broken = sum(1 for q in before if before[q]["correct"] == 1 and after[q]["correct"] == 0)
-    p = mcnemar_p(fixed, broken)
-    check = {"pass": p < ALPHA, "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
-    for name, rows in (("before", before), ("after", after)):
-        rows = [rows[q] for q in before]
-        check[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
-                       "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
-    (vd / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
-    if p >= ALPHA:
+    # 4. 验证集检查：正确率显著高于当前版本
+    check = compare(scores(current, "val"), evaluate(new, "val", "val"))
+    (result_dir(new, "val") / "check.json").write_text(json.dumps(check, indent=2))
+    if not check["pass"]:
         return entry | rejected("验证集检查未通过：正确率没有显著提高")
 
-    # 4. 保留：在整个训练集上运行，供下一轮分析
+    # 5. 保留：在整个训练集上评测，供下一轮分析
     evaluate(new, "train", "train")
     return entry | {"result": "kept"}
 
 
-def main():
-    branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
-    if branch == "HEAD":
-        sys.exit("请先切换到一个分支")
-    if subprocess.run(["git", "check-ignore", "-q", "runs/"]).returncode != 0:
-        sys.exit("请先把 runs/ 加入 .gitignore")
-    if not git("tag", "-l", "v0.0"):
-        if git("status", "--porcelain", "--untracked-files=no") or git("status", "--porcelain", "--", HARNESS):
-            sys.exit("有未提交的改动，请先提交")
-        git("tag", "v0.0")
-    for split in ("train", "val"):
-        if not (result_dir("v0.0", split) / "scores.jsonl").exists():
-            evaluate("v0.0", split, split)
+def final(current):
+    """在测试集上比较初始版本和当前版本。"""
+    if current == "v0.0":
+        sys.exit("没有保留任何修改")
+    check = compare(evaluate("v0.0", "test", "test"), evaluate(current, "test", "test"))
+    (result_dir(current, "test") / "check.json").write_text(json.dumps(check, indent=2))
+    print(json.dumps(check, indent=2))
 
-    history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []
+
+def main():
+    try:
+        CFG.update(DEFAULTS | json.loads(Path("evolve.json").read_text(encoding="utf-8")))
+    except FileNotFoundError:
+        sys.exit("请在项目根目录运行，并准备好 evolve.json")
+    if (RUNS / "test").exists() and sys.argv[1:] != ["final"]:
+        sys.exit("已经在测试集上评测过，不能再继续优化")
+
+    # 初始版本：复制 harness 作为 v0.0；评测协议改变时，不复用已有的结果
+    if not harness_dir("v0.0").exists():
+        shutil.copytree(CFG["harness"], harness_dir("v0.0"), ignore=shutil.ignore_patterns("__pycache__"))
+    if not (RUNS / "protocol.txt").exists():
+        (RUNS / "protocol.txt").write_text(protocol())
+    elif (RUNS / "protocol.txt").read_text() != protocol():
+        sys.exit("评测协议变了（eval 命令或 protocol 中的文件）。请把 runs/ 改名保存后重新开始；"
+                 "确认改动不影响评测结果的话，删除 runs/protocol.txt 再运行")
+    for d in ("train", "val"):
+        (RUNS / d).mkdir(exist_ok=True)
+    HISTORY.touch()
+    for split in ("train", "val"):
+        evaluate("v0.0", split, split)
+
+    history = [json.loads(line) for line in HISTORY.read_text(encoding="utf-8").splitlines()]
     while True:
         # 版本号 vK.J：K 是轮次，J 是本轮第几次尝试；当前版本是最近一个被保留的版本
         current = next((h["version"] for h in reversed(history) if h["result"] == "kept"), "v0.0")
+        if sys.argv[1:] == ["final"]:
+            return final(current)
         k = int(current[1:].split(".")[0]) + 1
         j = sum(h["version"].startswith(f"v{k}.") for h in history)
-        if k > MAX_ROUNDS or j >= MAX_TRIES:
+        if k > CFG["max_rounds"] or j >= CFG["max_tries"]:
             break
         new = f"v{k}.{j + 1}"
-        entry = {"version": new, "base": current} | attempt(branch, current, new)
+        entry = {"version": new, "base": current} | attempt(current, new)
         history.append(entry)
         with open(HISTORY, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         print(json.dumps(entry, ensure_ascii=False))
 
-    checkout(current)
-    print(f"停止。当前版本：{current}。在测试集上比较 {current} 和 v0.0 的工作由人完成。")
+    print(f"停止。当前版本 {current} 的 harness 在 {harness_dir(current)}。"
+          f"用 python {sys.argv[0]} final 在测试集上比较 {current} 和 v0.0。")
 
 
 if __name__ == "__main__":

@@ -18,8 +18,8 @@ harness-evolve 是一个极简的 harness 改进循环。
    1. 按[规范](SPEC.md)提供初始 harness 文件夹：包含所有待优化的 harness 代码。
    2. 按[规范](SPEC.md)提供评测脚本 `eval.py`：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
    3. 用 `Dockerfile.pi` 构建 proposer 运行的镜像。
-   4. 填写 `evolve.py` 开头的配置。
-3. 在项目根目录运行 `evolve.py`：
+   4. 按[规范](SPEC.md)在项目根目录写好配置 `evolve.json`。
+3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`：
 
    ```
    Input:  initial harness, train set, validation set, proposer,
@@ -30,7 +30,9 @@ harness-evolve 是一个极简的 harness 改进循环。
    for k = 1 … K:
        for j = 1 … J:                                ▷ version vk.j
            proposer reads history and current's train trajectories,
-               edits current into candidate, and lists targets
+               edits a copy of current into candidate, and lists targets
+           if candidate fails check:                 ▷ optional
+               continue
            if no target is fixed:                    ▷ train check
                continue
            if candidate is not significantly better
@@ -44,7 +46,7 @@ harness-evolve 是一个极简的 harness 改进循环。
    return current
    ```
 
-4. 在 test set 上比较最终的 harness 和初始 harness。
+4. 运行 `python <harness-evolve 目录>/evolve.py final`，在 test set 上比较最终的 harness 和初始 harness。之后不能再继续优化。
 
 ## 验证集检查
 
@@ -58,37 +60,36 @@ $$
 
 $p < 0.05$ 表示这个结果很难用偶然解释，因此认为修改有效，予以保留；否则撤销。
 
+这是针对单次比较的检验。同一个验证集会被反复用来挑选候选，同一来源的题目之间也相互关联，所以整个优化过程的误报率会高于 5%，最终效果以 test set 为准。
+
 token 消耗和步数只做记录，不参与判断。
 
 ## 记录
 
 每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试，v0.0 是初始版本。只有修改被保留，才进入下一轮。
 
-- **git** 保存每次尝试的代码，以版本号为标签。当前分支只包含被保留的版本，没有保留的尝试通过标签访问，例如 `git diff v1.1 v2.1`。
-- **runs/** 保存进度、得分和轨迹，分为 proposer 可以看的 `train/` 和不能看的 `val/`。这些文件由程序生成，不提交到 git。
+所有记录都在 `runs/` 中。项目中的 harness 文件夹不会被修改，最终版本的 harness 在 `runs/candidates/<版本>/` 中。
 
 ```
 runs/
 ├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
-├── train/                 proposer 可以看
-│   ├── v0.0/
-│   │   ├── scores.jsonl
-│   │   └── trajectory/
-│   └── v1.1/
-│       ├── proposal.json  proposer 的产出：问题、修改说明、targets
-│       ├── proposer.jsonl proposer 的轨迹
-│       ├── check.json     训练集检查的结论
-│       ├── targets/       重新运行 targets 的结果：scores.jsonl、trajectory/
-│       ├── scores.jsonl   通过后，整个训练集的结果
-│       └── trajectory/
-└── val/                   proposer 不能看
-    ├── v0.0/
-    │   ├── scores.jsonl
-    │   └── trajectory/
-    └── v1.1/
-        ├── check.json     验证集检查的结论
-        ├── scores.jsonl
-        └── trajectory/
+├── protocol.txt           评测协议的指纹：评测命令或 protocol 中的文件改变时，拒绝继续
+├── candidates/<版本>/
+│   ├── harness/           这个版本的 harness 代码
+│   ├── proposal.json      proposer 的产出：问题、修改说明、targets
+│   └── proposer.jsonl     proposer 的轨迹
+├── train/<版本>/
+│   ├── check.json         训练集检查的结论
+│   ├── targets/           重新运行 targets 的结果
+│   ├── scores.jsonl       通过后，整个训练集的结果
+│   └── trajectory/
+├── val/<版本>/
+│   ├── check.json         验证集检查的结论
+│   ├── scores.jsonl
+│   └── trajectory/
+└── test/<版本>/           final 的结果
 ```
 
-`scores.jsonl` 每行一道题的 correct、tokens、steps，`trajectory/` 中每道题一个 agent 轨迹文件。某一步没有通过，之后的结果就不会生成。
+每个评测结果都是一个 `scores.jsonl`（每行一道题的 correct、tokens、steps）和一个 `trajectory/`（每道题一个 agent 轨迹文件）。某一步没有通过，之后的结果就不会生成。
+
+Proposer 在沙箱中只能看到 `history.jsonl`、`candidates/` 和 `train/`，只能修改本次版本的 `candidates/<版本>/`。
