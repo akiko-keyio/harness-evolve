@@ -156,7 +156,7 @@ def main():
         j = sum(h["version"].startswith(f"v{k}.") for h in history)
         if k > MAX_ROUNDS or j >= MAX_TRIES:
             break
-        new = f"v{k}.{j}"
+        new = f"v{k}.{j + 1}"
         entry = {"version": new, "base": current} | attempt(branch, current, new)
         history.append(entry)
         with open(HISTORY, "a", encoding="utf-8") as f:

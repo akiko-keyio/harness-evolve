@@ -25,7 +25,7 @@ harness-evolve 是一个极简的 harness 改进循环。
            evaluate current on train set and validation set
 
    for k = 1 … K:
-       for j = 0 … J-1:                              ▷ version vk.j
+       for j = 1 … J:                                ▷ version vk.j
            proposer reads history and current's train trajectories,
                edits current into candidate, and lists targets
            if no target is fixed:                    ▷ train check
@@ -59,9 +59,9 @@ token 消耗和步数只做记录，不参与判断。
 
 ## 记录
 
-每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试（J 从 0 开始），v0.0 是初始版本。只有修改被保留，才进入下一轮。
+每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试，v0.0 是初始版本。只有修改被保留，才进入下一轮。
 
-- **git** 保存每次尝试的代码，以版本号为标签。当前分支只包含被保留的版本，没有保留的尝试通过标签访问，例如 `git diff v1.0 v2.0`。
+- **git** 保存每次尝试的代码，以版本号为标签。当前分支只包含被保留的版本，没有保留的尝试通过标签访问，例如 `git diff v1.1 v2.1`。
 - **runs/** 保存进度、得分和轨迹。这些文件由程序生成，不提交到 git。
 
 ```
@@ -74,7 +74,7 @@ runs/
 │   └── trajectory/
 │       ├── val/
 │       └── train/
-└── v1.0/
+└── v1.1/
     ├── proposal.json      proposer 的产出：问题、修改说明、targets
     ├── proposer.jsonl     proposer 的轨迹
     ├── check.json         两项检查的结论
@@ -96,5 +96,3 @@ runs/
 2. 按 [SPEC.md](SPEC.md) 准备项目：数据集、harness 文件夹和 `eval.py`。把 `runs/` 加入 `.gitignore`，在专用分支上提交。
 3. 在 `evolve.py` 开头填写配置。
 4. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。中途停止后再次运行，会丢弃没有完成的那次尝试，从它重新开始。
-
-运行期间，项目中受 git 管理的文件只有 harness 文件夹会改变，其他文件在每次尝试前都会恢复原样。因此 `evolve.py` 和 `proposer.md` 放在项目之外，停止后可以随时修改再继续。
