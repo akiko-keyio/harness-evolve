@@ -16,13 +16,13 @@ HARNESS = "harness/"  # harness 文件夹，只采纳其中的改动（规范见
 EVAL = "python eval.py --split {split} --scores {scores} --trajectory {trajectory}"  # 评测脚本（规范见 SPEC.md）
 EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
 # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
-# {project}、{new}、{user} 会替换为项目路径、本次版本号和当前用户
+# {project}、{harness}、{new}、{user} 会替换为项目路径、harness 文件夹、本次版本号和当前用户
 PROPOSER = ["docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
             "-v", "{project}:/workspace:ro",                                 # 项目只读
-            "-v", "{project}/harness:/workspace/harness",                    # harness 可写
+            "-v", "{project}/{harness}:/workspace/{harness}",                # harness 可写
             "-v", "{project}/runs/train/{new}:/workspace/runs/train/{new}",  # 写出 proposal.json
             "--tmpfs", "/workspace/runs/val",                                # 遮住验证集上的记录
-            "--tmpfs", "/workspace/data",                                    # 遮住数据集（按实际路径修改）
+            "--tmpfs", "/workspace/data",                                    # 遮住数据集；数据集不在项目内时删掉这一行
             "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
 ALPHA = 0.05        # 显著性水平
 MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
@@ -94,7 +94,7 @@ def attempt(branch, current, new):
     for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
     with open(d / "proposer.jsonl", "w", encoding="utf-8") as f:
-        cmd = [a.format(project=Path.cwd(), new=new, user=f"{os.getuid()}:{os.getgid()}") for a in PROPOSER]
+        cmd = [a.format(project=Path.cwd(), harness=HARNESS, new=new, user=f"{os.getuid()}:{os.getgid()}") for a in PROPOSER]
         subprocess.run(cmd + [prompt], stdout=f, check=True)
     git("symbolic-ref", "HEAD", f"refs/heads/{branch}")  # proposer 切换过分支时，指回原分支
     git("reset", "-q", "--soft", current)                # proposer 自己提交过时，合并成一次改动

@@ -101,7 +101,7 @@ with open(args.scores, "w") as f:
     for q in questions:
         try:
             from harness.agent import run  # 在 try 中导入：harness 有语法错误时，也只是记为答错
-            r = run(q, llm)
+            r = run({k: v for k, v in q.items() if k != "answer"}, llm)  # 不把标准答案传给 harness
         except Exception:
             r = {"answer": None, "tokens": 0, "steps": 0, "trajectory": traceback.format_exc()}
         correct = int(r["answer"] == q["answer"])
