@@ -40,7 +40,7 @@ description: 循环修改一个 agent 的 harness，并用验证集检验每次�
 ## 一次尝试
 
 1. 确认 `git status --porcelain` 没有输出。有输出说明工作区有未提交的改动，停止。
-2. 调用 proposer，传给它 `{current}`、`{new}`、harness 文件，以及本轮已失败的尝试（`runs/` 下其他 vK.* 目录中的 `proposal.json` 路径，没有则为空）。它返回后，确认：
+2. 调用 proposer，传给它 `{current}`、`{new}` 和 harness 文件（它会自己读取 `runs/` 中以前各次尝试的记录）。它返回后，确认：
    - `runs/{new}/proposal.json` 已经写出；
    - `git status --porcelain` 中只出现 harness 文件，且状态都是 M（只修改，没有新建或删除）。
 

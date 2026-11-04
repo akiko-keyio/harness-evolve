@@ -13,14 +13,13 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 - `{current}`：当前版本，例如 v1.1
 - `{new}`：本次尝试的版本，例如 v2.0
 - harness 文件：允许你修改的文件
-- 本轮已失败的尝试：同一轮中之前各次尝试的 `proposal.json` 路径，本轮第一次尝试时为空
 
 ## 步骤
 
-1. 如果有本轮已失败的尝试，先读它们的 `proposal.json`。你要换一个问题，或者换一种改法。
-2. 在 `runs/{current}/eval_train/results.jsonl` 中找出答错的题（`correct` 为 0），阅读它们在 `runs/{current}/eval_train/traces/` 中的轨迹。错题很多时，随机抽取一部分阅读，直到能看出主要的问题。
+1. 了解历史：读 `runs/` 下以前各次尝试的 `proposal.json` 和 `check_train.json`，并用 `git log --oneline` 查看哪些版本被保留了。被保留的修改说明哪些方向有效；没有通过的尝试，不要重复同样的问题和改法。
+2. 在 `runs/{current}/eval_train/results.jsonl` 中找出答错的题（`correct` 为 0），阅读它们在 `runs/{current}/eval_train/traces/` 中的轨迹。错题很多时，随机抽取一部分阅读，直到能看出主要的问题。需要时，可以对比同一道题在以前版本 `runs/<版本>/eval_train/traces/` 中的轨迹，看以前的修改带来了什么变化。
 3. 从这些轨迹中，抽象总结出一个在很多题目上出现、由 harness 不完善限制了 LLM 而导致的问题。
-4. 修改 harness 文件来解决这个问题。只改已有的文件，不新建、不删除，也不提交；不要写只对某几道题或某些数据成立的规则。
+4. 在当前版本的基础上修改 harness 文件来解决这个问题。只改已有的文件，不新建、不删除，也不提交；不要写只对某几道题或某些数据成立的规则。
 5. 写出 `runs/{new}/proposal.json`：
 
 ```json
@@ -40,4 +39,4 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 
 所以修改要解决这个问题本身，而不只是修好你读过的那几道题。
 
-不要读取任何 `eval_val/` 目录和测试集。
+不要读取任何 `eval_val/` 目录、`check_val.json` 和测试集。
