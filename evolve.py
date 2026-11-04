@@ -5,6 +5,7 @@
 """
 import json
 import math
+import os
 import shutil
 import subprocess
 import sys
@@ -14,13 +15,15 @@ from pathlib import Path
 HARNESS = "harness/"  # harness 文件夹，只采纳其中的改动（规范见 SPEC.md）
 EVAL = "python eval.py --split {split} --scores {scores} --trajectory {trajectory}"  # 评测脚本（规范见 SPEC.md）
 EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
-PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]  # 最后追加 prompt
+# proposer 命令，最后追加 prompt；{project}、{new}、{user} 会替换为项目路径、本次版本号和当前用户（在容器中运行时用到，见 README）
+PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
 ALPHA = 0.05        # 显著性水平
 MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
 MAX_TRIES = 3       # 每轮最多尝试次数：一轮都没有通过，停止
 # --------------------------
 
-RUNS = Path("runs")
+RUNS = Path("runs")          # proposer 可以看的记录
+VAL_RUNS = Path("val_runs")  # proposer 不能看的记录：验证集上的得分、轨迹和检查结论
 HISTORY = RUNS / "history.jsonl"
 PROMPT = Path(__file__).with_name("proposer.md")
 
@@ -35,9 +38,13 @@ def checkout(version):
     git("clean", "-fdq", "--", HARNESS)
 
 
+def root(name):
+    return VAL_RUNS if name == "val" else RUNS
+
+
 def evaluate(version, name, split, qids=None):
-    """运行评测，得分写入 runs/<版本>/scores/<name>.jsonl，轨迹写入 runs/<版本>/trajectory/<name>/。"""
-    d = RUNS / version
+    """运行评测，得分写入 <根目录>/<版本>/scores/<name>.jsonl，轨迹写入 <根目录>/<版本>/trajectory/<name>/。"""
+    d = root(name) / version
     out = d / "scores" / f"{name}.jsonl"
     tmp = out.with_suffix(".tmp")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -48,7 +55,7 @@ def evaluate(version, name, split, qids=None):
 
 
 def scores(version, name):
-    with open(RUNS / version / "scores" / f"{name}.jsonl", encoding="utf-8") as f:
+    with open(root(name) / version / "scores" / f"{name}.jsonl", encoding="utf-8") as f:
         return {r["qid"]: r for r in map(json.loads, filter(str.strip, f))}
 
 
@@ -69,8 +76,9 @@ def rejected(reason):
 
 def attempt(branch, current, new):
     # 0. 从当前版本开始；丢弃上次没有完成的同一次尝试
-    d = RUNS / new
+    d, vd = RUNS / new, VAL_RUNS / new
     shutil.rmtree(d, ignore_errors=True)
+    shutil.rmtree(vd, ignore_errors=True)
     subprocess.run(["git", "tag", "-d", new], capture_output=True)
     checkout(current)
     d.mkdir(parents=True)
@@ -80,7 +88,8 @@ def attempt(branch, current, new):
     for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
     with open(d / "proposer.jsonl", "w", encoding="utf-8") as f:
-        subprocess.run(PROPOSER + [prompt], stdout=f, check=True)
+        cmd = [a.format(project=Path.cwd(), new=new, user=f"{os.getuid()}:{os.getgid()}") for a in PROPOSER]
+        subprocess.run(cmd + [prompt], stdout=f, check=True)
     git("symbolic-ref", "HEAD", f"refs/heads/{branch}")  # proposer 切换过分支时，指回原分支
     git("reset", "-q", "--soft", current)                # proposer 自己提交过时，合并成一次改动
     git("restore", "--source", current, "--staged", "--worktree", "--", ".", f":!{HARNESS}")  # 丢弃 harness 以外的改动
@@ -98,16 +107,11 @@ def attempt(branch, current, new):
     git("commit", "-qm", f"{new}: {entry['change']}")
     git("tag", new)
 
-    check = {}
-    def write_check():
-        (d / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
-
     # 2. 训练集检查：targets 中至少一道错题变对
     before = scores(current, "train")
     after = evaluate(new, "targets", "train", targets)
     fixed = sum(1 for q in targets if before.get(q, {}).get("correct") == 0 and after.get(q, {}).get("correct") == 1)
-    check["targets"] = {"pass": fixed > 0, "fixed": fixed}
-    write_check()
+    (d / "check.json").write_text(json.dumps({"pass": fixed > 0, "fixed": fixed}, indent=2), encoding="utf-8")
     if fixed == 0:
         return entry | rejected("训练集检查未通过：targets 中没有一道题变对")
 
@@ -120,12 +124,12 @@ def attempt(branch, current, new):
     fixed = sum(1 for q in before if before[q]["correct"] == 0 and after[q]["correct"] == 1)
     broken = sum(1 for q in before if before[q]["correct"] == 1 and after[q]["correct"] == 0)
     p = mcnemar_p(fixed, broken)
-    check["val"] = {"pass": p < ALPHA, "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
+    check = {"pass": p < ALPHA, "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
     for name, rows in (("before", before), ("after", after)):
         rows = [rows[q] for q in before]
-        check["val"][name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
-                              "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
-    write_check()
+        check[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
+                       "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
+    (vd / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
     if p >= ALPHA:
         return entry | rejected("验证集检查未通过：正确率没有显著提高")
 
@@ -138,14 +142,15 @@ def main():
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
     if branch == "HEAD":
         sys.exit("请先切换到一个分支")
-    if subprocess.run(["git", "check-ignore", "-q", "runs/"]).returncode != 0:
-        sys.exit("请先把 runs/ 加入 .gitignore")
+    for path in ("runs/", "val_runs/"):
+        if subprocess.run(["git", "check-ignore", "-q", path]).returncode != 0:
+            sys.exit(f"请先把 {path} 加入 .gitignore")
     if not git("tag", "-l", "v0.0"):
         if git("status", "--porcelain", "--untracked-files=no") or git("status", "--porcelain", "--", HARNESS):
             sys.exit("有未提交的改动，请先提交")
         git("tag", "v0.0")
     for split in ("train", "val"):
-        if not (RUNS / "v0.0" / "scores" / f"{split}.jsonl").exists():
+        if not (root(split) / "v0.0" / "scores" / f"{split}.jsonl").exists():
             evaluate("v0.0", split, split)
 
     history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []

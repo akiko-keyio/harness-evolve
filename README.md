@@ -62,37 +62,63 @@ token 消耗和步数只做记录，不参与判断。
 每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试，v0.0 是初始版本。只有修改被保留，才进入下一轮。
 
 - **git** 保存每次尝试的代码，以版本号为标签。当前分支只包含被保留的版本，没有保留的尝试通过标签访问，例如 `git diff v1.1 v2.1`。
-- **runs/** 保存进度、得分和轨迹。这些文件由程序生成，不提交到 git。
+- **runs/** 和 **val_runs/** 保存进度、得分和轨迹，按 proposer 能否查看分开：验证集上的结果只放在 val_runs/。这些文件由程序生成，不提交到 git。
 
 ```
-runs/
+runs/                      proposer 可以看
 ├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
 ├── v0.0/
-│   ├── scores/
-│   │   ├── val.jsonl
-│   │   └── train.jsonl
-│   └── trajectory/
-│       ├── val/
-│       └── train/
+│   ├── scores/train.jsonl
+│   └── trajectory/train/
 └── v1.1/
     ├── proposal.json      proposer 的产出：问题、修改说明、targets
     ├── proposer.jsonl     proposer 的轨迹
-    ├── check.json         两项检查的结论
+    ├── check.json         训练集检查的结论
     ├── scores/            得分：每行一道题的 correct、tokens、steps
     │   ├── targets.jsonl
-    │   ├── val.jsonl
     │   └── train.jsonl
     └── trajectory/        agent 轨迹：每道题一个文件
         ├── targets/
-        ├── val/
         └── train/
+
+val_runs/                  proposer 不能看
+├── v0.0/
+│   ├── scores/val.jsonl
+│   └── trajectory/val/
+└── v1.1/
+    ├── check.json         验证集检查的结论
+    ├── scores/val.jsonl
+    └── trajectory/val/
 ```
 
-`scores/` 和 `trajectory/` 一一对应，按流程顺序有三部分：`targets` 是训练集检查时重新运行的错题，`val` 是验证集检查，`train` 是通过后的整个训练集。某一步没有通过，之后的部分就不会生成。
+`targets` 是训练集检查时重新运行的错题，`val` 是验证集检查，`train` 是通过后的整个训练集。某一步没有通过，之后的部分就不会生成。
 
 ## 使用
 
 1. 安装 pi：`npm install -g @earendil-works/pi-coding-agent`，并配置好模型的 API key。
-2. 按 [SPEC.md](SPEC.md) 准备项目：数据集、harness 文件夹和 `eval.py`。把 `runs/` 加入 `.gitignore`，在专用分支上提交。
+2. 按 [SPEC.md](SPEC.md) 准备项目：数据集、harness 文件夹和 `eval.py`。把 `data/`、`runs/`、`val_runs/` 加入 `.gitignore`，在专用分支上提交。
 3. 在 `evolve.py` 开头填写配置。
 4. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。中途停止后再次运行，会丢弃没有完成的那次尝试，从它重新开始。
+
+### 在容器中运行 proposer
+
+proposer 有 bash，只靠 prompt 不能保证它不看验证集、不改记录。正式运行时，建议在容器中运行 pi，只挂载它需要的内容：
+
+| 路径 | 挂载方式 |
+|---|---|
+| `harness/` | 可写 |
+| `runs/<本次版本>/` | 可写，用于写出 `proposal.json` |
+| `runs/`、`.git`、`eval.py` | 只读 |
+| `data/`、`val_runs/` | 不挂载 |
+
+对应的配置，镜像需要装好 pi 和 git：
+
+```python
+PROPOSER = ["docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY", "-w", "/work",
+            "-v", "{project}/harness:/work/harness",
+            "-v", "{project}/runs:/work/runs:ro",
+            "-v", "{project}/runs/{new}:/work/runs/{new}",
+            "-v", "{project}/.git:/work/.git:ro",
+            "-v", "{project}/eval.py:/work/eval.py:ro",
+            "pi-image", "pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
+```

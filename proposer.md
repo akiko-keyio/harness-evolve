@@ -16,7 +16,7 @@
 
 ## 不要做的
 
-- 不要看验证集和测试集：`runs/*/check.json`、`runs/*/scores/val.jsonl`、`runs/*/trajectory/val/`，以及数据集中的 val、test 部分。
+- 不要看验证集和测试集：`val_runs/`，以及数据集中的 val、test 部分。
 - 只修改 harness 文件夹内的文件，可以新建或删除，文件夹以外的改动会被丢弃；不要改变 harness 被评测脚本调用的接口。
 - 不要运行评测，也不要提交或打标签，这些由流程完成。
 - 不要切换分支或 checkout 其他版本，查看旧版本用 `git show`、`git diff`。
