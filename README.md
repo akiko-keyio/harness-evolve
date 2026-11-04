@@ -14,11 +14,12 @@ harness-evolve 是一个极简的 harness 改进循环。
    1. train set（训练集）：用于分析错误案例以便改进 harness。
    2. validation set（验证集）：用于判断改进是否真实有效。
    3. test set（测试集）：用于确认最终效果。
-2. 按[规范](SPEC.md)提供初始 harness 文件夹和 `eval.py`：
-   1. 初始 harness 文件夹：包含所有待优化的 harness 代码。
-   2. 评测脚本：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
-3. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f Dockerfile.pi .`
-4. 填写 `evolve.py` 开头的配置（包括 K、J），在项目根目录运行它：
+2. 配置：
+   1. 按[规范](SPEC.md)提供初始 harness 文件夹：包含所有待优化的 harness 代码。
+   2. 按[规范](SPEC.md)提供评测脚本 `eval.py`：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
+   3. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f Dockerfile.pi .`
+   4. 填写 `evolve.py` 开头的配置，包括 K、J。
+3. 在项目根目录运行 `evolve.py`：
 
    ```
    Input:  initial harness, train set, validation set, proposer,
@@ -43,7 +44,7 @@ harness-evolve 是一个极简的 harness 改进循环。
    return current
    ```
 
-5. 在 test set 上比较最终的 harness 和初始 harness。
+4. 在 test set 上比较最终的 harness 和初始 harness。
 
 ## 验证集检查
 
