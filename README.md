@@ -1,6 +1,6 @@
 # harness-evolve
 
-harness-evolve 是一个极简的 harness 改进循环：模型固定，反复修改 prompt、工具描述等，只保留经统计检验有效的修改。
+harness-evolve 是一个极简的 harness 改进循环：模型固定，反复修改 prompt、工具等，只保留经统计检验有效的修改。
 
 ## 组成
 
@@ -10,25 +10,23 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
 - **validation set**（验证集）：用来判断修改是否有效。
 - **test set**（测试集）：优化过程中不使用，全部结束后由人确认最终效果。
 
-三个组成部分：
+两个文件：
 
-- **orchestrator**：主 agent，加载 `SKILL.md`，按流程推进优化。
-- **proposer**：子 agent，加载 `agents/proposer.md`，负责分析错题、修改 harness。
-- **check.py**：检查脚本 `eval/check.py`，根据评测结果判断修改是否保留。
+- **`evolve.py`**：控制流程的 Python 脚本，负责运行评测、调用 proposer、检查、提交或撤销。
+- **`proposer.md`**：交给 proposer 的 prompt。proposer 由 [pi](https://github.com/earendil-works/pi) 以非交互模式运行，只给它读、搜索和编辑文件的工具，没有 bash。
 
 ## 流程
 
 ```
-for 每一轮:
-    for 本轮的每次尝试:
-        1. proposer 阅读以前各次尝试的记录和当前版本在训练集上的错题轨迹，找出最常见的一类错误，修改 harness
-        2. 训练集检查：重新运行 proposer 列出的错题，如果一道都没答对，撤销修改，再试一次
-        3. 验证集检查：如果验证集上的正确率没有显著高于当前版本，撤销修改，再试一次
-        4. 两项检查都通过：保留修改，作为新的当前版本；在整个训练集上运行它，供下一轮分析错题；进入下一轮
-    如果本轮所有尝试都没有通过，停止
+运行初始版本 v0，得到训练集和验证集上的结果
+重复，直到尝试次数用完，或者连续若干次没有通过：
+    1. proposer 阅读以前各次尝试的记录和当前版本在训练集上的轨迹，修改 harness
+    2. 训练集检查：重新运行 proposer 列出的错题，一道都没变对，撤销
+    3. 验证集检查：验证集上的正确率没有显著高于当前版本，撤销
+    4. 两项都通过：保留修改，作为新的当前版本；在整个训练集上运行它，供下一次分析
 ```
 
-结束后，由人在测试集上比较最终的当前版本和初始版本。
+结束后，由人在测试集上比较最终的当前版本和 v0。
 
 ## 验证集检查
 
@@ -42,29 +40,35 @@ $$
 
 $p < 0.05$ 表示这个结果很难用偶然解释，因此认为修改有效，予以保留；否则撤销。
 
+token 消耗和步数只做记录，不参与判断。
+
 ## 记录
 
-每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试（J 从 0 开始），v0.0 是初始版本。代码和过程分开保存：
+每次尝试按顺序编号 v1、v2……，v0 是初始版本。
 
-- **git** 只保存通过检查的版本。每个通过的版本提交一次，以版本号为标签，例如用 `git diff v0.0 v2.0` 查看两个版本之间的改动。
-- **runs/** 保存每次尝试的评测结果、运行轨迹和检查结论，包括没有通过的尝试。这些文件体积大、由程序生成，不提交到 git。
+- **git** 只保存通过检查的版本，以版本号为标签，例如用 `git diff v0 v3` 查看两个版本之间的改动。
+- **runs/** 保存每次尝试的记录，包括没有通过的。这些文件由程序生成，不提交到 git。
 
 ```
 runs/
-├── v0.0/
+├── history.jsonl             每次尝试一行：基于哪个版本、问题、修改、是否保留及原因
+├── v0/
 │   ├── eval_train/           初始版本在训练集上的结果
 │   └── eval_val/             初始版本在验证集上的结果
-└── v1.0/
-    ├── proposal.json         proposer 找出的错误类型、修改说明和列出的错题
+└── v1/
+    ├── proposer_trace.jsonl  proposer 的运行轨迹
+    ├── change.diff           这次尝试的代码改动
+    ├── proposal.json         proposer 找出的问题、修改说明和列出的错题
     ├── eval_train_targets/   重新运行这些错题的结果
-    ├── check_train.json      训练集检查的结论
     ├── eval_val/             验证集上的结果
-    ├── check_val.json        验证集检查的结论，以及平均 token 消耗和步数
+    ├── check_val.json        验证集检查的结果，以及平均 token 消耗和步数
     └── eval_train/           通过后，整个训练集上的结果
 ```
 
 ## 使用
 
-1. 把 `SKILL.md` 和 `agents/proposer.md` 放到编码 agent（如 Cursor、Claude Code）的 skill 和子 agent 目录，把 `eval/check.py` 放到项目中。
-2. 填写 `SKILL.md` 开头的配置，并完成其中的准备步骤。
-3. 对编码 agent 说“开始 harness 优化”。
+1. 安装 pi：`npm install -g @earendil-works/pi-coding-agent`，并配置好模型的 API key。
+2. 把数据集分成训练集、验证集和测试集。来源相同的题（例如同一个视频的多道题）放在同一份里。
+3. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，填写 `evolve.py` 开头的配置。评测命令要按配置中说明的格式输出结果。
+4. 在专用分支上提交当前代码，把 `runs/` 加入 `.gitignore`。
+5. 运行 `python evolve.py`。中途停止后再次运行，会从上次的进度继续。
