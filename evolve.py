@@ -109,7 +109,7 @@ def same_tree(a, b):
 
 
 def eval_hash():
-    """评测命令和 eval_files 中各文件内容的哈希，用来发现评测设置是否改过。"""
+    """评测命令和 eval_files 内容的哈希。"""
     h = hashlib.sha256(json.dumps(CFG["eval"]).encode())
     for f in CFG["eval_files"]:
         h.update(f.encode() + Path(f).read_bytes())
@@ -191,14 +191,13 @@ def main():
     if (RUNS / "test").exists() and sys.argv[1:] != ["final"]:
         sys.exit("已经在测试集上评测过，不能再继续优化")
 
-    # 初始版本：复制 harness 作为 v0.0；评测设置改过时，不能再用已有的结果
+    # 初始版本：复制 harness 作为 v0.0；评测方式改过时停止，不混用新旧结果
     if not harness_dir("v0.0").exists():
         shutil.copytree(CFG["harness"], harness_dir("v0.0"), ignore=shutil.ignore_patterns("__pycache__"))
     if not (RUNS / "eval_hash.txt").exists():
         (RUNS / "eval_hash.txt").write_text(eval_hash())
     elif (RUNS / "eval_hash.txt").read_text() != eval_hash():
-        sys.exit("评测命令或 eval_files 中的文件改过了，已有的评测结果不能再用。请把 runs/ 改名保存后重新开始；"
-                 "确定改动不影响评测结果的话，删除 runs/eval_hash.txt 再运行")
+        sys.exit("评测方式改过了（eval 或 eval_files），旧结果不能再用，请把 runs/ 改名后重新开始")
     for d in ("train", "val"):
         (RUNS / d).mkdir(exist_ok=True)
     HISTORY.touch()

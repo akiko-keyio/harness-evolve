@@ -73,7 +73,7 @@ token 消耗和步数只做记录，不参与判断。
 ```
 runs/
 ├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
-├── eval_hash.txt          评测设置的哈希：评测命令或评测文件改过时，停止运行
+├── eval_hash.txt          评测方式的哈希，改过评测方式就停止运行
 ├── candidates/<版本>/
 │   ├── harness/           这个版本的 harness 代码
 │   ├── proposal.json      proposer 的产出：问题、修改说明、targets
