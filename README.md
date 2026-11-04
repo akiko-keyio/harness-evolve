@@ -15,9 +15,9 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
    - **test set**（测试集）：优化过程中不使用，全部结束后由人确认最终效果。
 
    来源相同的题（例如同一个视频的多道题）放在同一份里。
-2. 由人定义评测脚本和 harness 文件，填进 `evolve.py` 开头的配置：
-   - **评测脚本**：接受 `--split train/val`、`--out <目录>`，以及可选的 `--qids <逗号分隔的题号>`（只运行这些题）。输出 `<目录>/results.jsonl`，每行一道题：`{"qid": ..., "correct": 0 或 1, "tokens": token 消耗, "steps": agent 步数}`；以及 `<目录>/traces/`，每道题一个轨迹文件，文件名包含题号。
-   - **harness 文件**：允许 proposer 修改的文件，用 glob 列出，例如 `agent/prompts/*.md`。评测脚本、数据集不能放在里面。
+2. 由人准备评测脚本和 harness 文件，填进 `evolve.py` 开头的配置：
+   - **评测脚本**：在指定的数据集上运行 agent，输出每道题的结果和轨迹，格式见[评测脚本](#评测脚本)。
+   - **harness 文件**：允许 proposer 修改的文件，例如 `agent/prompts/*.md`。
 3. `evolve.py` 运行初始版本 v0.0，得到训练集和验证集上的结果，然后循环：
 
    ```
@@ -31,6 +31,22 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
    ```
 
 4. 由人在测试集上比较最终的当前版本和 v0.0。
+
+## 评测脚本
+
+调用方式：
+
+```
+python eval/run.py --split train --out runs/v0.0/eval_train [--qids q1,q2]
+```
+
+`--split` 取 train 或 val，`--qids` 表示只运行这些题。输出：
+
+```
+<out>/
+├── results.jsonl   每行一道题，例如 {"qid": "q1", "correct": 1, "tokens": 5230, "steps": 7}
+└── traces/         每道题一个轨迹文件，例如 q1.json
+```
 
 ## 验证集检查
 
