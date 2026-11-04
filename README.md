@@ -31,7 +31,7 @@ harness-evolve 是一个极简的 harness 改进循环。
        for j = 1 … J:                                ▷ version vk.j
            proposer reads history and current's train trajectories,
                edits a copy of current into candidate, and lists targets
-           if candidate fails check:                 ▷ optional
+           if candidate fails user check:            ▷ optional, e.g. edit scope
                continue
            if no target is fixed:                    ▷ train check
                continue
@@ -73,7 +73,7 @@ token 消耗和步数只做记录，不参与判断。
 ```
 runs/
 ├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
-├── protocol.txt           评测协议的指纹：评测命令或 protocol 中的文件改变时，拒绝继续
+├── eval_hash.txt          评测设置的哈希：评测命令或评测文件改过时，停止运行
 ├── candidates/<版本>/
 │   ├── harness/           这个版本的 harness 代码
 │   ├── proposal.json      proposer 的产出：问题、修改说明、targets

@@ -18,7 +18,7 @@ DEFAULTS = {
     "eval": None,          # 评测命令，必填
     "check": None,         # 候选检查命令，可选
     "task": None,          # 追加给 proposer 的任务说明文件，可选
-    "protocol": [],        # 决定评测结果的文件，例如评测脚本、数据划分、模型配置
+    "eval_files": [],      # 影响评测结果的文件，例如评测脚本、数据划分、模型配置
     "proposer": [          # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
         "docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
         "-v", "{runs}/history.jsonl:/workspace/runs/history.jsonl:ro",
@@ -108,10 +108,10 @@ def same_tree(a, b):
     return files(a) == files(b)
 
 
-def protocol():
-    """评测协议的指纹：评测命令和 protocol 中各文件的内容。"""
+def eval_hash():
+    """评测命令和 eval_files 中各文件内容的哈希，用来发现评测设置是否改过。"""
     h = hashlib.sha256(json.dumps(CFG["eval"]).encode())
-    for f in CFG["protocol"]:
+    for f in CFG["eval_files"]:
         h.update(f.encode() + Path(f).read_bytes())
     return h.hexdigest()
 
@@ -191,14 +191,14 @@ def main():
     if (RUNS / "test").exists() and sys.argv[1:] != ["final"]:
         sys.exit("已经在测试集上评测过，不能再继续优化")
 
-    # 初始版本：复制 harness 作为 v0.0；评测协议改变时，不复用已有的结果
+    # 初始版本：复制 harness 作为 v0.0；评测设置改过时，不能再用已有的结果
     if not harness_dir("v0.0").exists():
         shutil.copytree(CFG["harness"], harness_dir("v0.0"), ignore=shutil.ignore_patterns("__pycache__"))
-    if not (RUNS / "protocol.txt").exists():
-        (RUNS / "protocol.txt").write_text(protocol())
-    elif (RUNS / "protocol.txt").read_text() != protocol():
-        sys.exit("评测协议变了（eval 命令或 protocol 中的文件）。请把 runs/ 改名保存后重新开始；"
-                 "确认改动不影响评测结果的话，删除 runs/protocol.txt 再运行")
+    if not (RUNS / "eval_hash.txt").exists():
+        (RUNS / "eval_hash.txt").write_text(eval_hash())
+    elif (RUNS / "eval_hash.txt").read_text() != eval_hash():
+        sys.exit("评测命令或 eval_files 中的文件改过了，已有的评测结果不能再用。请把 runs/ 改名保存后重新开始；"
+                 "确定改动不影响评测结果的话，删除 runs/eval_hash.txt 再运行")
     for d in ("train", "val"):
         (RUNS / d).mkdir(exist_ok=True)
     HISTORY.touch()
