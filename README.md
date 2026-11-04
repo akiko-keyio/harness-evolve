@@ -1,6 +1,6 @@
 # harness-evolve
 
-harness-evolve 是一个极简的 harness 改进循环：模型固定，反复修改 prompt、工具等，只保留经统计检验有效的修改。
+harness-evolve 是一个极简的 harness 改进循环。
 
 ## 组成
 
