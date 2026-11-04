@@ -15,15 +15,21 @@ from pathlib import Path
 HARNESS = "harness/"  # harness 文件夹，只采纳其中的改动（规范见 SPEC.md）
 EVAL = "python eval.py --split {split} --scores {scores} --trajectory {trajectory}"  # 评测脚本（规范见 SPEC.md）
 EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
-# proposer 命令，最后追加 prompt；{project}、{new}、{user} 会替换为项目路径、本次版本号和当前用户（在容器中运行时用到，见 README）
-PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
+# proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
+# {project}、{new}、{user} 会替换为项目路径、本次版本号和当前用户
+PROPOSER = ["docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
+            "-v", "{project}:/workspace:ro",                                 # 项目只读
+            "-v", "{project}/harness:/workspace/harness",                    # harness 可写
+            "-v", "{project}/runs/train/{new}:/workspace/runs/train/{new}",  # 写出 proposal.json
+            "--tmpfs", "/workspace/runs/val",                                # 遮住验证集上的记录
+            "--tmpfs", "/workspace/data",                                    # 遮住数据集
+            "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
 ALPHA = 0.05        # 显著性水平
 MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
 MAX_TRIES = 3       # 每轮最多尝试次数：一轮都没有通过，停止
 # --------------------------
 
-RUNS = Path("runs")          # proposer 可以看的记录
-VAL_RUNS = Path("val_runs")  # proposer 不能看的记录：验证集上的得分、轨迹和检查结论
+RUNS = Path("runs")  # runs/train/ 给 proposer 看；runs/val/ 是验证集上的记录，不给 proposer 看
 HISTORY = RUNS / "history.jsonl"
 PROMPT = Path(__file__).with_name("proposer.md")
 
@@ -38,24 +44,24 @@ def checkout(version):
     git("clean", "-fdq", "--", HARNESS)
 
 
-def root(name):
-    return VAL_RUNS if name == "val" else RUNS
+def result_dir(version, name):
+    """评测结果的目录：targets 在 runs/train/<版本>/targets/，train 和 val 在 runs/<train 或 val>/<版本>/。"""
+    return RUNS / "train" / version / "targets" if name == "targets" else RUNS / name / version
 
 
 def evaluate(version, name, split, qids=None):
-    """运行评测，得分写入 <根目录>/<版本>/scores/<name>.jsonl，轨迹写入 <根目录>/<版本>/trajectory/<name>/。"""
-    d = root(name) / version
-    out = d / "scores" / f"{name}.jsonl"
-    tmp = out.with_suffix(".tmp")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = EVAL.format(split=split, scores=tmp, trajectory=d / "trajectory" / name)
+    """运行评测，得分写入 <结果目录>/scores.jsonl，轨迹写入 <结果目录>/trajectory/。"""
+    d = result_dir(version, name)
+    out, tmp = d / "scores.jsonl", d / "scores.tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    cmd = EVAL.format(split=split, scores=tmp, trajectory=d / "trajectory")
     subprocess.run(cmd + (EVAL_QIDS.format(qids=",".join(qids)) if qids else ""), shell=True, check=True)
     tmp.replace(out)  # 评测完整结束才生成得分文件，中途停止不会留下不完整的结果
     return scores(version, name)
 
 
 def scores(version, name):
-    with open(root(name) / version / "scores" / f"{name}.jsonl", encoding="utf-8") as f:
+    with open(result_dir(version, name) / "scores.jsonl", encoding="utf-8") as f:
         return {r["qid"]: r for r in map(json.loads, filter(str.strip, f))}
 
 
@@ -76,7 +82,7 @@ def rejected(reason):
 
 def attempt(branch, current, new):
     # 0. 从当前版本开始；丢弃上次没有完成的同一次尝试
-    d, vd = RUNS / new, VAL_RUNS / new
+    d, vd = RUNS / "train" / new, RUNS / "val" / new
     shutil.rmtree(d, ignore_errors=True)
     shutil.rmtree(vd, ignore_errors=True)
     subprocess.run(["git", "tag", "-d", new], capture_output=True)
@@ -142,15 +148,14 @@ def main():
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
     if branch == "HEAD":
         sys.exit("请先切换到一个分支")
-    for path in ("runs/", "val_runs/"):
-        if subprocess.run(["git", "check-ignore", "-q", path]).returncode != 0:
-            sys.exit(f"请先把 {path} 加入 .gitignore")
+    if subprocess.run(["git", "check-ignore", "-q", "runs/"]).returncode != 0:
+        sys.exit("请先把 runs/ 加入 .gitignore")
     if not git("tag", "-l", "v0.0"):
         if git("status", "--porcelain", "--untracked-files=no") or git("status", "--porcelain", "--", HARNESS):
             sys.exit("有未提交的改动，请先提交")
         git("tag", "v0.0")
     for split in ("train", "val"):
-        if not (root(split) / "v0.0" / "scores" / f"{split}.jsonl").exists():
+        if not (result_dir("v0.0", split) / "scores.jsonl").exists():
             evaluate("v0.0", split, split)
 
     history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []

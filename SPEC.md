@@ -7,7 +7,7 @@ project/
 ├── harness/        初始 harness 文件夹：所有待优化的 harness 代码
 ├── eval.py         评测脚本
 ├── data/           评测数据集
-└── .gitignore      包含 data/、runs/、val_runs/
+└── .gitignore      包含 data/、runs/
 ```
 
 ## 评测数据集
@@ -46,7 +46,7 @@ harness/
 调用方式：
 
 ```
-python eval.py --split train --scores runs/v0.0/scores/train.jsonl --trajectory runs/v0.0/trajectory/train [--qids q001,q002]
+python eval.py --split train --scores runs/train/v0.0/scores.jsonl --trajectory runs/train/v0.0/trajectory [--qids q001,q002]
 ```
 
 - `--split`：train、val 或 test。
