@@ -16,24 +16,23 @@ harness-evolve 是一个极简的 harness 改进循环。
 2. 按[规范](SPEC.md)提供初始 harness 文件夹和 `eval.py`：
    1. 初始 harness 文件夹：包含所有待优化的 harness 代码。
    2. 评测脚本：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
-3. 运行 `evolve.py`：
+3. 运行 `evolve.py`（K、J 在配置中设定，默认为 5、3）：
 
    ```
-   输入：初始 harness H，训练集 T，验证集 V，proposer P
-   初始化：在 T 和 V 上评测 H
+   输入：初始 harness，train set，validation set，proposer，最多轮数 K，每轮最多尝试次数 J
+   初始化：在 train set 和 validation set 上评测初始 harness，作为当前 harness
 
-   for 轮次 k = 1 … 5:
-       for 尝试 j = 0 … 2:                                 ▷ 版本号 vk.j
-           P 读取历史记录和 H 在 T 上的轨迹
-           P 修改 H 得到 H′，并列出 targets                ▷ targets：预期能修好的训练集错题
-           if H′ 在 targets 上没有一道题变对: continue     ▷ 训练集检查
-           if H′ 在 V 上没有显著优于 H: continue           ▷ 验证集检查
-           H ← H′，在 T 上评测 H                           ▷ 保留修改，供下一轮分析
+   for 轮次 k = 1 … K:
+       for 尝试 j = 0 … J-1:                                                       ▷ 版本号 vk.j
+           proposer 读取历史记录和当前 harness 在 train set 上的轨迹
+           proposer 修改当前 harness 得到新 harness，并列出 targets                ▷ targets：预期能修好的错题
+           if 新 harness 在 targets 上没有一道题变对: continue                     ▷ 训练集检查
+           if 新 harness 在 validation set 上没有显著优于当前 harness: continue    ▷ 验证集检查
+           当前 harness ← 新 harness，在 train set 上评测                          ▷ 保留修改，供下一轮分析
            break
        if 本轮没有保留修改: break
-   return H
+   return 当前 harness
    ```
-
 4. 在测试集上比较最终的当前版本和 v0.0。
 
 ## 验证集检查
