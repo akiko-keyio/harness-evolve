@@ -22,7 +22,7 @@ PROPOSER = ["docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e"
             "-v", "{project}/harness:/workspace/harness",                    # harness 可写
             "-v", "{project}/runs/train/{new}:/workspace/runs/train/{new}",  # 写出 proposal.json
             "--tmpfs", "/workspace/runs/val",                                # 遮住验证集上的记录
-            "--tmpfs", "/workspace/data",                                    # 遮住数据集
+            "--tmpfs", "/workspace/data",                                    # 遮住数据集（按实际路径修改）
             "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]
 ALPHA = 0.05        # 显著性水平
 MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮

@@ -17,7 +17,8 @@ harness-evolve 是一个极简的 harness 改进循环。
 2. 按[规范](SPEC.md)提供初始 harness 文件夹和 `eval.py`：
    1. 初始 harness 文件夹：包含所有待优化的 harness 代码。
    2. 评测脚本：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
-3. 运行 `evolve.py`（K、J 在配置中设定）：
+3. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f Dockerfile.pi .`
+4. 填写 `evolve.py` 开头的配置（包括 K、J），在项目根目录运行它：
 
    ```
    Input:  initial harness, train set, validation set, proposer,
@@ -42,7 +43,7 @@ harness-evolve 是一个极简的 harness 改进循环。
    return current
    ```
 
-4. 在 test set 上比较最终的 harness 和初始 harness。
+5. 在 test set 上比较最终的 harness 和初始 harness。
 
 ## 验证集检查
 
@@ -90,26 +91,3 @@ runs/
 ```
 
 `scores.jsonl` 每行一道题的 correct、tokens、steps，`trajectory/` 中每道题一个 agent 轨迹文件。某一步没有通过，之后的结果就不会生成。
-
-## 使用
-
-1. 按 [SPEC.md](SPEC.md) 准备项目：数据集、harness 文件夹和 `eval.py`。把 `data/`、`runs/` 加入 `.gitignore`，在专用分支上提交。
-2. 构建 proposer 的容器镜像（用 pi 官方的[容器写法](https://pi.dev/docs/latest/containerization)）：
-
-   ```
-   docker build -t pi-sandbox -f <harness-evolve 目录>/Dockerfile.pi <harness-evolve 目录>
-   ```
-
-3. 在 `evolve.py` 开头填写配置。
-4. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。中途停止后再次运行，会丢弃没有完成的那次尝试，从它重新开始。
-
-proposer 在容器中运行，只能看到它该看的内容：
-
-| 路径 | 容器中 |
-|---|---|
-| `harness/` | 可写 |
-| `runs/train/<本次版本>/` | 可写，用于写出 `proposal.json` |
-| 项目中的其他文件，包括 `.git` | 只读 |
-| `runs/val/`、`data/` | 空目录 |
-
-数据集不在 `data/` 时，把 `evolve.py` 中 `PROPOSER` 的 `/workspace/data` 改成实际路径。
