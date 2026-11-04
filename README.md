@@ -59,7 +59,7 @@ runs/
     ├── eval_train_targets/   重新运行这些错题的结果
     ├── check_train.json      训练集检查的结论
     ├── eval_val/             验证集上的结果
-    ├── check_val.json        验证集检查的结论
+    ├── check_val.json        验证集检查的结论，以及平均 token 消耗和步数
     └── eval_train/           通过后，整个训练集上的结果
 ```
 

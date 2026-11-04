@@ -16,7 +16,7 @@ description: 循环修改一个 agent 的 harness，并用验证集检验每次�
 - harness 文件（允许修改的文件）：`<例如 agent/prompts/*.md>`
 - 评测命令：`<例如 python eval/run.py --split {split} --out {out} [--qids {qids}]>`
   - `split` 取 train 或 val；`--qids` 是逗号分隔的题号，传入时只运行这些题
-  - 命令输出 `{out}/results.jsonl`（每行一道题：`{"qid": ..., "correct": 0 或 1}`）和 `{out}/traces/`（每道题一个轨迹文件，文件名包含题号）
+  - 命令输出 `{out}/results.jsonl`（每行一道题：`{"qid": ..., "correct": 0 或 1, "tokens": token 消耗, "steps": agent 步数}`；tokens 和 steps 只做记录，不参与判断）和 `{out}/traces/`（每道题一个轨迹文件，文件名包含题号）
 - 显著性水平：0.05
 - 最多轮数：5
 - 每轮最多尝试次数：3

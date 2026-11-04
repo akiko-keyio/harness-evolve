@@ -1,6 +1,7 @@
 """harness-evolve 的两项检查。agent 只调用，不修改。
 
-results.jsonl 每行一道题：{"qid": "...", "correct": 0 或 1}
+results.jsonl 每行一道题：{"qid": "...", "correct": 0 或 1, "tokens": 整数, "steps": 整数}
+tokens（token 消耗）和 steps（agent 步数）只做记录，不参与判断。
 
   python eval/check.py check-train <当前版本 eval_train/results.jsonl> <本次版本 eval_train_targets/results.jsonl> --out check_train.json
   python eval/check.py check-val   <当前版本 eval_val/results.jsonl>   <本次版本 eval_val/results.jsonl> --alpha 0.05 --out check_val.json
@@ -11,9 +12,22 @@ import math
 import sys
 
 
-def load(path):
+def load_rows(path):
     with open(path, encoding="utf-8") as f:
-        return {r["qid"]: int(r["correct"]) for r in map(json.loads, filter(str.strip, f))}
+        return {r["qid"]: r for r in map(json.loads, filter(str.strip, f))}
+
+
+def load(path):
+    return {q: int(r["correct"]) for q, r in load_rows(path).items()}
+
+
+def mean_cost(rows, qids):
+    """每道题平均的 tokens 和 steps；缺少该字段时为 None。"""
+    out = {}
+    for k in ("tokens", "steps"):
+        vals = [rows[q][k] for q in qids if k in rows[q]]
+        out[k] = round(sum(vals) / len(vals), 1) if len(vals) == len(qids) else None
+    return out
 
 
 def diff(old, new):
@@ -43,6 +57,7 @@ def check_train(old_path, new_path, out):
 
 
 def check_val(old_path, new_path, alpha, out):
+    old_rows, new_rows = load_rows(old_path), load_rows(new_path)
     old, new = load(old_path), load(new_path)
     missing = old.keys() - new.keys()
     if missing:
@@ -56,6 +71,8 @@ def check_val(old_path, new_path, alpha, out):
         "acc_after": round(sum(new[q] for q in old) / len(old), 4),
         "fixed": fixed,
         "broken": broken,
+        "cost_before": mean_cost(old_rows, list(old)),
+        "cost_after": mean_cost(new_rows, list(old)),
     }, out)
 
 
