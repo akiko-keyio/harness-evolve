@@ -7,13 +7,15 @@
 - harness 文件夹：`{harness}`
 - `runs/history.jsonl`：以前每次尝试一行，包括基于哪个版本、找出的问题、修改说明、是否保留及原因
 - `runs/<版本>/change.diff`：每次尝试的代码改动，包括没有保留的
-- `runs/<版本>/eval_train/`：被保留的版本在训练集上的结果。`results.jsonl` 每行一道题（`qid`、`correct`、`tokens`、`steps`），`traces/` 中是每道题的轨迹
+- `runs/<版本>/proposer/proposal.json`：每次尝试找出的问题、修改说明和 targets
+- `runs/<版本>/train/`：被保留的版本在训练集上的结果。`results.jsonl` 每行一道题（`qid`、`correct`、`tokens`、`steps`），`trajectories/` 中是每道题的 agent 轨迹
+- `runs/<版本>/train_targets/`：每次尝试重新运行 targets 的结果和轨迹
 
 怎么分析由你决定。
 
 ## 不要做的
 
-- 不要读 `eval_val/`、`check_val.json` 和测试集。
+- 不要读 `runs/*/val/` 和测试集。
 - 只修改 harness 文件夹内的文件，可以新建或删除。
 - 不要改变 harness 被评测脚本调用的接口。
 - 不要写只对个别题目或特定数据成立的规则。
@@ -22,7 +24,7 @@
 ## 产出
 
 1. 在当前版本的 harness 上做一处修改，解决一个在很多题上出现、由 harness 不完善导致的问题。
-2. 写出 `runs/{new}/proposal.json`：
+2. 写出 `runs/{new}/proposer/proposal.json`：
 
    ```json
    {"problem": "找出的问题", "change": "做了什么修改", "targets": ["预期这处修改能修好的训练集错题题号"]}

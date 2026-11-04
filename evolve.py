@@ -59,7 +59,8 @@ def attempt(current, new):
     prompt = PROMPT.read_text(encoding="utf-8")
     for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
-    with open(d / "proposer_trace.jsonl", "w", encoding="utf-8") as f:
+    (d / "proposer").mkdir(exist_ok=True)
+    with open(d / "proposer" / "trajectory.jsonl", "w", encoding="utf-8") as f:
         subprocess.run(PROPOSER + [prompt], stdout=f, check=True)
     git("add", "-A")  # 暂存全部改动，包括新建和删除的文件（runs/ 被 .gitignore 忽略）
     (d / "change.diff").write_text(git("diff", "--cached"), encoding="utf-8")
@@ -73,22 +74,22 @@ def attempt(current, new):
     if not status or not all(s[3:].strip('"').startswith(HARNESS) for s in status):
         return reject("没有修改，或者改动了 harness 文件夹以外的文件")
     try:
-        proposal = json.loads((d / "proposal.json").read_text(encoding="utf-8"))
+        proposal = json.loads((d / "proposer" / "proposal.json").read_text(encoding="utf-8"))
         targets = [str(q) for q in proposal["targets"]]
     except (OSError, ValueError, KeyError, TypeError):
         return reject("proposal.json 缺失或格式不对")
     entry = {"problem": proposal.get("problem"), "change": proposal.get("change")}
 
     # 2. 训练集检查：targets 中至少一道错题变对
-    before = load(RUNS / current / "eval_train")
-    after = evaluate("train", d / "eval_train_targets", targets)
+    before = load(RUNS / current / "train")
+    after = evaluate("train", d / "train_targets", targets)
     fixed = sum(1 for q in targets if before.get(q, {}).get("correct") == 0 and after.get(q, {}).get("correct") == 1)
     if fixed == 0:
         return entry | reject("训练集检查未通过：targets 中没有一道题变对")
 
     # 3. 验证集检查：正确率显著高于当前版本
-    before = load(RUNS / current / "eval_val")
-    after = evaluate("val", d / "eval_val")
+    before = load(RUNS / current / "val")
+    after = evaluate("val", d / "val")
     missing = before.keys() - after.keys()
     if missing:
         sys.exit(f"{new} 的验证集结果缺少 {len(missing)} 道题")
@@ -100,12 +101,12 @@ def attempt(current, new):
         rows = [rows[q] for q in before]
         check[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
                        "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
-    (d / "check_val.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
+    (d / "val" / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
     if p >= ALPHA:
         return entry | reject("验证集检查未通过：正确率没有显著提高")
 
     # 4. 保留：在整个训练集上运行，供下一次分析
-    evaluate("train", d / "eval_train")
+    evaluate("train", d / "train")
     git("commit", "-qm", new)
     git("tag", new)
     return entry | {"result": "kept"}
@@ -119,8 +120,8 @@ def main():
     if not git("tag", "-l", "v0.0"):
         git("tag", "v0.0")
     for split in ("train", "val"):
-        if not (RUNS / "v0.0" / f"eval_{split}" / "results.jsonl").exists():
-            evaluate(split, RUNS / "v0.0" / f"eval_{split}")
+        if not (RUNS / "v0.0" / split / "results.jsonl").exists():
+            evaluate(split, RUNS / "v0.0" / split)
 
     history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []
     while True:

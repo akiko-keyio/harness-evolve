@@ -55,17 +55,19 @@ token 消耗和步数只做记录，不参与判断。
 runs/
 ├── history.jsonl             每次尝试一行：基于哪个版本、问题、修改、是否保留及原因
 ├── v0.0/
-│   ├── eval_train/           初始版本在训练集上的结果
-│   └── eval_val/             初始版本在验证集上的结果
+│   ├── train/                初始版本在训练集上的评测结果
+│   └── val/                  初始版本在验证集上的评测结果
 └── v1.0/
-    ├── proposer_trace.jsonl  proposer 的运行轨迹
-    ├── change.diff           这次尝试的代码改动
-    ├── proposal.json         proposer 找出的问题、修改说明和列出的错题
-    ├── eval_train_targets/   重新运行这些错题的结果
-    ├── eval_val/             验证集上的结果
-    ├── check_val.json        验证集检查的结果，以及平均 token 消耗和步数
-    └── eval_train/           通过后，整个训练集上的结果
+    ├── proposer/
+    │   ├── trajectory.jsonl  proposer 的轨迹
+    │   └── proposal.json     找出的问题、修改说明和 targets
+    ├── change.diff           代码改动
+    ├── train_targets/        训练集检查：重新运行 targets 的评测结果
+    ├── val/                  验证集检查：评测结果，以及检查结论 check.json
+    └── train/                通过后，整个训练集的评测结果
 ```
+
+每个评测结果目录的格式相同：`results.jsonl` 记录每道题的得分和成本，`trajectories/` 保存每道题的 agent 轨迹。
 
 ## 使用
 
