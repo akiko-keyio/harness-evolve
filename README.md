@@ -4,9 +4,9 @@ harness-evolve 是一个极简的 harness 改进循环。
 
 ## 组成
 
-- **Proposer**：基于 pi coding agent 和系统指令 `proposer.md` 构建的 harness 优化 agent。
-- **Process control**：驱动 Proposer 提出改进、再评估验证的完整 harness 优化流程（`evolve.py`）。
-- **Sandbox**：基于 Docker 的隔离环境（`Dockerfile.pi`），用于限制 Proposer 的操作，避免 harness 优化中出现 reward hacking。
+- **Proposer**：分析错误、修改 harness 的 agent，由 pi coding agent 和系统指令 `proposer.md` 构成。
+- **Process control**：驱动 Proposer 提出修改，再评估并决定是否保留的优化流程，由 `evolve.py` 实现。
+- **Sandbox**：限制 Proposer 能读写的内容、防止 reward hacking 的隔离环境，基于 Docker（`Dockerfile.pi`）。
 
 ## 流程
 
