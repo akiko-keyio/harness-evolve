@@ -31,8 +31,6 @@ harness-evolve 是一个极简的 harness 改进循环。
        for j = 1 … J:                                ▷ version vk.j
            proposer reads history and current's train trajectories,
                edits a copy of current into candidate, and lists targets
-           if candidate fails user check:            ▷ optional, e.g. edit scope
-               continue
            if no target is fixed:                    ▷ train check
                continue
            if candidate is not significantly better

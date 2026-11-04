@@ -13,6 +13,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Windows 上没有 fcntl，不加锁
+    fcntl = None
+
 DEFAULTS = {
     "harness": "harness",  # 初始 harness 文件夹
     "eval": None,          # 评测命令，必填
@@ -20,7 +25,7 @@ DEFAULTS = {
     "task": None,          # 追加给 proposer 的任务说明文件，可选
     "eval_files": [],      # 影响评测结果的文件，例如评测脚本、数据划分、模型配置
     "proposer": [          # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
-        "docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
+        "docker", "run", "--rm", "--init", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
         "-v", "{runs}/history.jsonl:/workspace/runs/history.jsonl:ro",
         "-v", "{runs}/candidates:/workspace/runs/candidates:ro",
         "-v", "{runs}/candidates/{new}:/workspace/runs/candidates/{new}",
@@ -55,8 +60,9 @@ def result_dir(version, name):
 def read_scores(path):
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     scores = {r["qid"]: r for r in rows}
-    if len(scores) != len(rows) or not all(isinstance(q, str) and r["correct"] in (0, 1) for q, r in scores.items()):
-        sys.exit(f"{path} 格式不对：题号要是不重复的字符串，correct 要是 0 或 1")
+    if not rows or len(scores) != len(rows) or not all(isinstance(q, str) and type(r["correct"]) is int and r["correct"] in (0, 1)
+                                                         for q, r in scores.items()):
+        sys.exit(f"{path} 格式不对：不能为空，题号要是不重复的字符串，correct 要是整数 0 或 1")
     return scores
 
 
@@ -72,7 +78,9 @@ def evaluate(version, name, split, qids=None):
         d.mkdir(parents=True, exist_ok=True)
         cmd = fill(CFG["eval"], harness=harness_dir(version), split=split, scores=tmp, trajectory=d / "trajectory")
         subprocess.run(cmd + (["--qids", ",".join(qids)] if qids else []), check=True, env=ENV)
-        read_scores(tmp)  # 格式正确才作为完整结果保存
+        got = read_scores(tmp)  # 格式正确、题号齐全，才作为完整结果保存
+        if qids and got.keys() != set(qids):
+            sys.exit(f"{tmp} 中的题号和要求运行的题号不一致")
         tmp.replace(out)
     return scores(version, name)
 
@@ -144,7 +152,10 @@ def attempt(current, new):
     try:
         proposal = json.loads((cand / "proposal.json").read_text(encoding="utf-8"))
         entry = {"problem": proposal["problem"], "change": proposal["change"]}
-        targets = sorted(set(proposal["targets"]))
+        targets = proposal["targets"]
+        if not isinstance(targets, list):
+            raise TypeError
+        targets = sorted(set(targets))
     except (OSError, ValueError, KeyError, TypeError):
         return rejected("proposal.json 缺失或格式不对")
     wrong = {q for q, r in scores(current, "train").items() if r["correct"] == 0}
@@ -188,12 +199,22 @@ def main():
         CFG.update(DEFAULTS | json.loads(Path("evolve.json").read_text(encoding="utf-8")))
     except FileNotFoundError:
         sys.exit("请在项目根目录运行，并准备好 evolve.json")
+    RUNS.mkdir(exist_ok=True)
+    lock = open(RUNS / "lock", "w")  # 同一时间只允许一个 evolve.py 使用 runs/
+    if fcntl:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit("另一个 evolve.py 正在使用 runs/")
     if (RUNS / "test").exists() and sys.argv[1:] != ["final"]:
         sys.exit("已经在测试集上评测过，不能再继续优化")
 
     # 初始版本：复制 harness 作为 v0.0；评测方式改过时停止，不混用新旧结果
     if not harness_dir("v0.0").exists():
-        shutil.copytree(CFG["harness"], harness_dir("v0.0"), ignore=shutil.ignore_patterns("__pycache__"))
+        tmp = RUNS / "candidates" / "v0.0.tmp"  # 复制完成后再改名，中断时不会留下不完整的初始版本
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(CFG["harness"], tmp / Path(CFG["harness"]).name, ignore=shutil.ignore_patterns("__pycache__"))
+        tmp.rename(RUNS / "candidates" / "v0.0")
     if not (RUNS / "eval_hash.txt").exists():
         (RUNS / "eval_hash.txt").write_text(eval_hash())
     elif (RUNS / "eval_hash.txt").read_text() != eval_hash():

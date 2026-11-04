@@ -65,8 +65,8 @@ harness/
 
 - 轨迹文件要包含 proposer 分析错误所需的全部信息：题目、标准答案、agent 的完整消息和工具调用、最终答案。
 - 不要把标准答案传给 harness。
-- harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。只有评测脚本自身出错时才以非零状态退出，此时 `evolve.py` 会停止。
-- 中断后重新运行时，同一次评测传入的路径不变。评测脚本可以利用轨迹目录中已有的逐题结果，只补跑没有完成的题。
+- harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。评测脚本自身或模型服务出错时以非零状态退出，此时 `evolve.py` 会停止，重新运行时会重做这次评测。
+- 需要逐题续跑时，由评测脚本自己缓存逐题结果。缓存放在 proposer 看不到的地方（不要放在 `runs/train/` 下），轨迹中也不要放 proposer 不该看的内容。
 
 示例 `eval.py`：
 
@@ -100,6 +100,8 @@ with open(args.scores, "w") as f:
         try:
             from harness.agent import run  # 在 try 中导入：harness 有语法错误时，也只是记为答错
             r = run({k: v for k, v in q.items() if k != "answer"}, llm)  # 不把标准答案传给 harness
+        except LLMServiceError:  # 模型服务故障不是 harness 的错：让评测脚本退出
+            raise
         except Exception:
             r = {"answer": None, "tokens": 0, "steps": 0, "trajectory": traceback.format_exc()}
         correct = int(r["answer"] == q["answer"])
@@ -112,6 +114,8 @@ with open(args.scores, "w") as f:
 ## 候选检查脚本（可选）
 
 proposer 修改完成后、评测之前运行，用来检查修改范围或运行离线测试。占位符 `{harness}` 是候选版本，`{base}` 是它所基于的当前版本。以非零状态退出表示不通过，输出的最后几行会作为原因记录。
+
+检查脚本不能修改候选；中断后重新运行时它会再运行一次，所以结果要确定。
 
 ## 任务说明（可选）
 
@@ -144,4 +148,4 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 }
 ```
 
-`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。
+`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。需要限制 proposer 的运行时间时，在命令前加 `"timeout", "-k", "30", "3600"`。
