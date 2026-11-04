@@ -18,8 +18,8 @@ EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加，qids 为逗号分�
 PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6",
             "--tools", "read,grep,find,ls,edit,write", "-p"]  # 最后追加 prompt
 ALPHA = 0.05        # 显著性水平
-MAX_ATTEMPTS = 15   # 最多尝试次数
-PATIENCE = 3        # 连续这么多次没有通过，停止
+MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
+MAX_TRIES = 3       # 每轮最多尝试次数：一轮都没有通过，停止
 # --------------------------
 
 RUNS = Path("runs")
@@ -117,34 +117,28 @@ def main():
         sys.exit("请先把 runs/ 加入 .gitignore")
     if git("status", "--porcelain"):
         sys.exit("工作区有未提交的改动，请先处理")
-    if not git("tag", "-l", "v0"):
-        git("tag", "v0")
+    if not git("tag", "-l", "v0.0"):
+        git("tag", "v0.0")
     for split in ("train", "val"):
-        if not (RUNS / "v0" / f"eval_{split}" / "results.jsonl").exists():
-            evaluate(split, RUNS / "v0" / f"eval_{split}")
+        if not (RUNS / "v0.0" / f"eval_{split}" / "results.jsonl").exists():
+            evaluate(split, RUNS / "v0.0" / f"eval_{split}")
 
     history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []
-    current = git("describe", "--tags", "--abbrev=0").strip()
-    fails = 0
-    for h in reversed(history):
-        if h["result"] == "kept":
+    while True:
+        # 版本号 vK.J：K 是轮次，J 是本轮第几次尝试；当前版本是最近一个通过的版本
+        current = git("describe", "--tags", "--abbrev=0").strip()
+        k = int(current[1:].split(".")[0]) + 1
+        j = sum(h["version"].startswith(f"v{k}.") for h in history)
+        if k > MAX_ROUNDS or j >= MAX_TRIES:
             break
-        fails += 1
-
-    while len(history) < MAX_ATTEMPTS and fails < PATIENCE:
-        new = f"v{len(history) + 1}"
+        new = f"v{k}.{j}"
         entry = {"version": new, "base": current} | attempt(current, new)
         history.append(entry)
         with open(HISTORY, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         print(json.dumps(entry, ensure_ascii=False))
-        if entry["result"] == "kept":
-            current, fails = new, 0
-        else:
-            fails += 1
 
-    print(f"停止。当前版本：{current}。在测试集上比较 {current} 和 v0 的工作由人完成。")
-
+    print(f"停止。当前版本：{current}。在测试集上比较 {current} 和 v0.0 的工作由人完成。")
 
 if __name__ == "__main__":
     main()
