@@ -18,7 +18,7 @@ harness-evolve 是一个极简的 harness 改进循环。
    1. 按[规范](SPEC.md)提供初始 harness 文件夹：包含所有待优化的 harness 代码。
    2. 按[规范](SPEC.md)提供评测脚本 `eval.py`：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
    3. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f Dockerfile.pi .`
-   4. 填写 `evolve.py` 开头的配置，包括 K、J。
+   4. 填写 `evolve.py` 开头的配置：harness 文件夹、评测命令、proposer 使用的模型、显著性水平，以及 K 和 J。
 3. 在项目根目录运行 `evolve.py`：
 
    ```
