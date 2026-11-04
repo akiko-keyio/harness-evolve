@@ -4,8 +4,8 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
 
 ## 组成
 
-- **`evolve.py`**：控制流程的 Python 脚本，负责运行评测、调用 proposer、检查、提交或撤销。
-- **`proposer.md`**：交给 proposer 的 prompt。proposer 由 [pi](https://github.com/earendil-works/pi) 以非交互模式运行，只给它读、搜索和编辑文件的工具，没有 bash。
+- **`evolve.py`**：控制流程的 Python 脚本
+- **`proposer.md`**：优化 harness 的 meta agent 的 prompt
 
 ## 流程
 
