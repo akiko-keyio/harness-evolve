@@ -148,4 +148,4 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 }
 ```
 
-`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。需要限制 proposer 的运行时间时，在命令前加 `"timeout", "-k", "30", "3600"`。
+`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。`Dockerfile.pi` 让 pi 在容器内最多运行 1 小时，超时或中断后容器会自动删除。

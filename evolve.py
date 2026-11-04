@@ -25,7 +25,7 @@ DEFAULTS = {
     "task": None,          # 追加给 proposer 的任务说明文件，可选
     "eval_files": [],      # 影响评测结果的文件，例如评测脚本、数据划分、模型配置
     "proposer": [          # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
-        "docker", "run", "--rm", "--init", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
+        "docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
         "-v", "{runs}/history.jsonl:/workspace/runs/history.jsonl:ro",
         "-v", "{runs}/candidates:/workspace/runs/candidates:ro",
         "-v", "{runs}/candidates/{new}:/workspace/runs/candidates/{new}",
