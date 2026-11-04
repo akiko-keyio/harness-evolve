@@ -53,23 +53,29 @@ token 消耗和步数只做记录，不参与判断。
 
 ```
 runs/
-├── history.jsonl            进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
+├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
 ├── v0.0/
-│   ├── scores/              train.jsonl、val.jsonl
-│   └── trajectory/          train/、val/
+│   ├── scores/
+│   │   ├── val.jsonl
+│   │   └── train.jsonl
+│   └── trajectory/
+│       ├── val/
+│       └── train/
 └── v1.0/
-    ├── proposal.json        proposer 找出的问题、修改说明和 targets
-    ├── scores/              得分：每行一道题的 correct、tokens、steps
-    │   ├── bad-case.jsonl   训练集检查：重新运行 targets
-    │   ├── val.jsonl        验证集检查
-    │   ├── val_check.json   验证集检查的结论：p 值、正确率、平均成本
-    │   └── train.jsonl      通过后，整个训练集
-    └── trajectory/          轨迹
-        ├── proposer.jsonl
-        ├── bad-case/
+    ├── proposal.json      proposer 的产出：问题、修改说明、targets
+    ├── proposer.jsonl     proposer 的轨迹
+    ├── check.json         两项检查的结论
+    ├── scores/            得分：每行一道题的 correct、tokens、steps
+    │   ├── targets.jsonl
+    │   ├── val.jsonl
+    │   └── train.jsonl
+    └── trajectory/        agent 轨迹：每道题一个文件
+        ├── targets/
         ├── val/
         └── train/
 ```
+
+`scores/` 和 `trajectory/` 一一对应，按流程顺序有三部分：`targets` 是训练集检查时重新运行的错题，`val` 是验证集检查，`train` 是通过后的整个训练集。某一步没有通过，之后的部分就不会生成。
 
 ## 使用
 

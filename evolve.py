@@ -55,13 +55,13 @@ def mcnemar_p(fixed, broken):
 
 def attempt(current, new):
     d = RUNS / new
-    (d / "trajectory").mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
 
     # 1. proposer 修改 harness
     prompt = PROMPT.read_text(encoding="utf-8")
     for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
-    with open(d / "trajectory" / "proposer.jsonl", "w", encoding="utf-8") as f:
+    with open(d / "proposer.jsonl", "w", encoding="utf-8") as f:
         subprocess.run(PROPOSER + [prompt], stdout=f, check=True)
     git("reset", "-q", "--soft", current)  # proposer 如果自己提交了，合并成一次改动
     git("add", "-A")                       # 暂存全部改动，包括新建和删除的文件
@@ -83,12 +83,18 @@ def attempt(current, new):
     git("commit", "-qm", f"{new}: {entry['change']}")
     git("tag", "-f", new)
 
-    # 2. 训练集检查：bad case 中至少一道题变对
+    check = {}
+    def write_check():
+        (d / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
+
+    # 2. 训练集检查：targets 中至少一道错题变对
     before = scores(current, "train")
-    after = evaluate(new, "bad-case", "train", targets)
+    after = evaluate(new, "targets", "train", targets)
     fixed = sum(1 for q in targets if before.get(q, {}).get("correct") == 0 and after.get(q, {}).get("correct") == 1)
+    check["targets"] = {"pass": fixed > 0, "fixed": fixed}
+    write_check()
     if fixed == 0:
-        return entry | reject("训练集检查未通过：bad case 中没有一道题变对")
+        return entry | reject("训练集检查未通过：targets 中没有一道题变对")
 
     # 3. 验证集检查：正确率显著高于当前版本
     before = scores(current, "val")
@@ -99,12 +105,12 @@ def attempt(current, new):
     fixed = sum(1 for q in before if before[q]["correct"] == 0 and after[q]["correct"] == 1)
     broken = sum(1 for q in before if before[q]["correct"] == 1 and after[q]["correct"] == 0)
     p = mcnemar_p(fixed, broken)
-    check = {"p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
+    check["val"] = {"pass": p < ALPHA, "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
     for name, rows in (("before", before), ("after", after)):
         rows = [rows[q] for q in before]
-        check[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
-                       "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
-    (d / "scores" / "val_check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
+        check["val"][name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
+                              "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
+    write_check()
     if p >= ALPHA:
         return entry | reject("验证集检查未通过：正确率没有显著提高")
 
