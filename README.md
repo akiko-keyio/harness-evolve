@@ -13,7 +13,12 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
    - **train set**（训练集）：用于分析错误案例，以便改进 harness。
    - **validation set**（验证集）：用来判断修改是否有效。
    - **test set**（测试集）：优化过程中不使用，全部结束后由人确认最终效果。
-2. `evolve.py` 运行初始版本 v0.0，得到训练集和验证集上的结果，然后循环：
+
+   来源相同的题（例如同一个视频的多道题）放在同一份里。
+2. 由人定义评测脚本和 harness 文件，填进 `evolve.py` 开头的配置：
+   - **评测脚本**：接受 `--split train/val`、`--out <目录>`，以及可选的 `--qids <逗号分隔的题号>`（只运行这些题）。输出 `<目录>/results.jsonl`，每行一道题：`{"qid": ..., "correct": 0 或 1, "tokens": token 消耗, "steps": agent 步数}`；以及 `<目录>/traces/`，每道题一个轨迹文件，文件名包含题号。
+   - **harness 文件**：允许 proposer 修改的文件，用 glob 列出，例如 `agent/prompts/*.md`。评测脚本、数据集不能放在里面。
+3. `evolve.py` 运行初始版本 v0.0，得到训练集和验证集上的结果，然后循环：
 
    ```
    for 每一轮:
@@ -25,7 +30,7 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
        如果本轮所有尝试都没有通过，停止
    ```
 
-3. 由人在测试集上比较最终的当前版本和 v0.0。
+4. 由人在测试集上比较最终的当前版本和 v0.0。
 
 ## 验证集检查
 
@@ -67,7 +72,6 @@ runs/
 ## 使用
 
 1. 安装 pi：`npm install -g @earendil-works/pi-coding-agent`，并配置好模型的 API key。
-2. 把数据集分成训练集、验证集和测试集。来源相同的题（例如同一个视频的多道题）放在同一份里。
-3. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，填写 `evolve.py` 开头的配置。评测命令要按配置中说明的格式输出结果。
-4. 在专用分支上提交当前代码，把 `runs/` 加入 `.gitignore`。
-5. 运行 `python evolve.py`。中途停止后再次运行，会从上次的进度继续。
+2. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，完成流程中的第 1、2 步。
+3. 在专用分支上提交当前代码，把 `runs/` 加入 `.gitignore`。
+4. 运行 `python evolve.py`。中途停止后再次运行，会从上次的进度继续。
