@@ -2,29 +2,29 @@
 
 当前版本是 {current}，本次尝试的版本是 {new}。
 
-## 可以读的
+## 可以看的
 
 - harness 文件夹：`{harness}`
-- `runs/history.jsonl`：以前每次尝试一行，包括基于哪个版本、找出的问题、修改说明、是否保留及原因
-- `runs/<版本>/change.diff`：每次尝试的代码改动，包括没有保留的
-- `runs/<版本>/proposer/proposal.json`：每次尝试找出的问题、修改说明和 targets
-- `runs/<版本>/train/`：被保留的版本在训练集上的结果。`results.jsonl` 每行一道题（`qid`、`correct`、`tokens`、`steps`），`trajectories/` 中是每道题的 agent 轨迹
-- `runs/<版本>/train_targets/`：每次尝试重新运行 targets 的结果和轨迹
+- git 历史：每次尝试都是一个提交，标签为版本号 vK.J。当前分支只包含被保留的版本，没有保留的尝试只能通过标签访问。可以用 `git log`、`git diff <版本> <版本>`、`git show <版本>:<文件>` 查看。
+- `runs/history.jsonl`：每次尝试一行，包括基于哪个版本、找出的问题、修改说明、是否保留及原因
+- `runs/<版本>/proposal.json`：每次尝试找出的问题、修改说明和 targets
+- `runs/<版本>/scores/train.jsonl`、`bad-case.jsonl`：训练集上每道题的得分，每行包括 `qid`、`correct`、`tokens`、`steps`
+- `runs/<版本>/trajectory/train/`、`bad-case/`：训练集上每道题的 agent 轨迹；`trajectory/proposer.jsonl` 是以前 proposer 的轨迹
 
-怎么分析由你决定。
+`train` 只有被保留的版本才有；`bad-case` 是重新运行 targets 的结果。怎么分析由你决定，可以写脚本统计。
 
 ## 不要做的
 
-- 不要读 `runs/*/val/` 和测试集。
-- 只修改 harness 文件夹内的文件，可以新建或删除。
-- 不要改变 harness 被评测脚本调用的接口。
+- 不要看验证集和测试集：`runs/*/scores/val*`、`runs/*/trajectory/val/`，以及数据集中的 val、test 部分。
+- 只修改 harness 文件夹内的文件，可以新建或删除；不要改变 harness 被评测脚本调用的接口。
+- 不要运行评测，也不要提交或打标签，这些由流程完成。
 - 不要写只对个别题目或特定数据成立的规则。
 - 不要重复以前没有通过的问题和改法。
 
 ## 产出
 
 1. 在当前版本的 harness 上做一处修改，解决一个在很多题上出现、由 harness 不完善导致的问题。
-2. 写出 `runs/{new}/proposer/proposal.json`：
+2. 写出 `runs/{new}/proposal.json`：
 
    ```json
    {"problem": "找出的问题", "change": "做了什么修改", "targets": ["预期这处修改能修好的训练集错题题号"]}

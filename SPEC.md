@@ -43,22 +43,15 @@ harness/
 调用方式：
 
 ```
-python eval.py --split train --out runs/v0.0/train [--qids q001,q002]
+python eval.py --split train --scores runs/v0.0/scores/train.jsonl --trajectory runs/v0.0/trajectory/train [--qids q001,q002]
 ```
 
 - `--split`：train、val 或 test。
-- `--out`：输出目录。
+- `--scores`：得分文件，每行一道题。
+- `--trajectory`：轨迹目录，每道题一个轨迹文件，文件名为题号，例如 `q001.json`。
 - `--qids`：可选，逗号分隔的题号，只运行这些题。
 
-输出：
-
-```
-<out>/
-├── results.jsonl   每行一道题
-└── trajectories/   每道题一个 agent 轨迹（trajectory）文件，文件名为题号，例如 q001.json
-```
-
-`results.jsonl` 每行的字段：
+得分文件每行的字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -86,7 +79,8 @@ from harness.agent import run
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--split", choices=["train", "val", "test"], required=True)
-ap.add_argument("--out", required=True)
+ap.add_argument("--scores", required=True)
+ap.add_argument("--trajectory", required=True)
 ap.add_argument("--qids")
 args = ap.parse_args()
 
@@ -95,16 +89,16 @@ if args.qids:
     qids &= set(args.qids.split(","))
 questions = [q for q in map(json.loads, open("data/questions.jsonl")) if q["qid"] in qids]
 
-out = Path(args.out)
-(out / "trajectories").mkdir(parents=True, exist_ok=True)
-with open(out / "results.jsonl", "w") as f:
+traj_dir = Path(args.trajectory)
+traj_dir.mkdir(parents=True, exist_ok=True)
+with open(args.scores, "w") as f:
     for q in questions:
         r = run(q)
         correct = int(r["answer"] == q["answer"])
         f.write(json.dumps({"qid": q["qid"], "correct": correct,
                             "tokens": r["tokens"], "steps": r["steps"]}) + "\n")
         traj = {"question": q, "answer": r["answer"], "correct": correct, "trajectory": r["trajectory"]}
-        (out / "trajectories" / f"{q['qid']}.json").write_text(json.dumps(traj, ensure_ascii=False, indent=2))
+        (traj_dir / f"{q['qid']}.json").write_text(json.dumps(traj, ensure_ascii=False, indent=2))
 ```
 
 单道题运行出错时，记为答错并把错误信息写进轨迹，不要让整个脚本退出。

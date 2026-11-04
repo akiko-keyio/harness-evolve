@@ -11,10 +11,9 @@ from pathlib import Path
 
 # ---------- 配置 ----------
 HARNESS = "harness/"  # harness 文件夹，proposer 只能修改其中的文件（规范见 SPEC.md）
-EVAL = "python eval.py --split {split} --out {out}"  # 评测脚本（规范见 SPEC.md）
+EVAL = "python eval.py --split {split} --scores {scores} --trajectory {trajectory}"  # 评测脚本（规范见 SPEC.md）
 EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
-PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6",
-            "--tools", "read,grep,find,ls,edit,write", "-p"]  # 最后追加 prompt
+PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p"]  # 最后追加 prompt
 ALPHA = 0.05        # 显著性水平
 MAX_ROUNDS = 5      # 最多轮数：每保留一次修改，进入下一轮
 MAX_TRIES = 3       # 每轮最多尝试次数：一轮都没有通过，停止
@@ -29,14 +28,17 @@ def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
 
 
-def evaluate(split, out, qids=None):
-    cmd = EVAL.format(split=split, out=out) + (EVAL_QIDS.format(qids=",".join(qids)) if qids else "")
-    subprocess.run(cmd, shell=True, check=True)
-    return load(out)
+def evaluate(version, name, split, qids=None):
+    """运行评测，得分写入 runs/<版本>/scores/<name>.jsonl，轨迹写入 runs/<版本>/trajectory/<name>/。"""
+    d = RUNS / version
+    (d / "scores").mkdir(parents=True, exist_ok=True)
+    cmd = EVAL.format(split=split, scores=d / "scores" / f"{name}.jsonl", trajectory=d / "trajectory" / name)
+    subprocess.run(cmd + (EVAL_QIDS.format(qids=",".join(qids)) if qids else ""), shell=True, check=True)
+    return scores(version, name)
 
 
-def load(out):
-    with open(Path(out) / "results.jsonl", encoding="utf-8") as f:
+def scores(version, name):
+    with open(RUNS / version / "scores" / f"{name}.jsonl", encoding="utf-8") as f:
         return {r["qid"]: r for r in map(json.loads, filter(str.strip, f))}
 
 
@@ -53,20 +55,19 @@ def mcnemar_p(fixed, broken):
 
 def attempt(current, new):
     d = RUNS / new
-    d.mkdir(parents=True, exist_ok=True)
+    (d / "trajectory").mkdir(parents=True, exist_ok=True)
 
     # 1. proposer 修改 harness
     prompt = PROMPT.read_text(encoding="utf-8")
     for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
-    (d / "proposer").mkdir(exist_ok=True)
-    with open(d / "proposer" / "trajectory.jsonl", "w", encoding="utf-8") as f:
+    with open(d / "trajectory" / "proposer.jsonl", "w", encoding="utf-8") as f:
         subprocess.run(PROPOSER + [prompt], stdout=f, check=True)
-    git("add", "-A")  # 暂存全部改动，包括新建和删除的文件（runs/ 被 .gitignore 忽略）
-    (d / "change.diff").write_text(git("diff", "--cached"), encoding="utf-8")
+    git("reset", "-q", "--soft", current)  # proposer 如果自己提交了，合并成一次改动
+    git("add", "-A")                       # 暂存全部改动，包括新建和删除的文件
 
     def reject(reason):
-        git("reset", "-q", "--hard")
+        git("reset", "-q", "--hard", current)  # 分支退回当前版本；已提交的尝试仍可通过标签访问
         git("clean", "-fdq")
         return {"result": "rejected", "reason": reason}
 
@@ -74,22 +75,24 @@ def attempt(current, new):
     if not status or not all(s[3:].strip('"').startswith(HARNESS) for s in status):
         return reject("没有修改，或者改动了 harness 文件夹以外的文件")
     try:
-        proposal = json.loads((d / "proposer" / "proposal.json").read_text(encoding="utf-8"))
+        proposal = json.loads((d / "proposal.json").read_text(encoding="utf-8"))
         targets = [str(q) for q in proposal["targets"]]
     except (OSError, ValueError, KeyError, TypeError):
         return reject("proposal.json 缺失或格式不对")
     entry = {"problem": proposal.get("problem"), "change": proposal.get("change")}
+    git("commit", "-qm", f"{new}: {entry['change']}")
+    git("tag", "-f", new)
 
-    # 2. 训练集检查：targets 中至少一道错题变对
-    before = load(RUNS / current / "train")
-    after = evaluate("train", d / "train_targets", targets)
+    # 2. 训练集检查：bad case 中至少一道题变对
+    before = scores(current, "train")
+    after = evaluate(new, "bad-case", "train", targets)
     fixed = sum(1 for q in targets if before.get(q, {}).get("correct") == 0 and after.get(q, {}).get("correct") == 1)
     if fixed == 0:
-        return entry | reject("训练集检查未通过：targets 中没有一道题变对")
+        return entry | reject("训练集检查未通过：bad case 中没有一道题变对")
 
     # 3. 验证集检查：正确率显著高于当前版本
-    before = load(RUNS / current / "val")
-    after = evaluate("val", d / "val")
+    before = scores(current, "val")
+    after = evaluate(new, "val", "val")
     missing = before.keys() - after.keys()
     if missing:
         sys.exit(f"{new} 的验证集结果缺少 {len(missing)} 道题")
@@ -101,16 +104,13 @@ def attempt(current, new):
         rows = [rows[q] for q in before]
         check[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
                        "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
-    (d / "val" / "check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
+    (d / "scores" / "val_check.json").write_text(json.dumps(check, indent=2), encoding="utf-8")
     if p >= ALPHA:
         return entry | reject("验证集检查未通过：正确率没有显著提高")
 
-    # 4. 保留：在整个训练集上运行，供下一次分析
-    evaluate("train", d / "train")
-    git("commit", "-qm", new)
-    git("tag", new)
+    # 4. 保留：在整个训练集上运行，供下一轮分析
+    evaluate(new, "train", "train")
     return entry | {"result": "kept"}
-
 
 def main():
     if subprocess.run(["git", "check-ignore", "-q", "runs/"]).returncode != 0:
@@ -120,13 +120,15 @@ def main():
     if not git("tag", "-l", "v0.0"):
         git("tag", "v0.0")
     for split in ("train", "val"):
-        if not (RUNS / "v0.0" / split / "results.jsonl").exists():
-            evaluate(split, RUNS / "v0.0" / split)
+        if not (RUNS / "v0.0" / "scores" / f"{split}.jsonl").exists():
+            evaluate("v0.0", split, split)
 
     history = [json.loads(l) for l in HISTORY.read_text(encoding="utf-8").splitlines()] if HISTORY.exists() else []
     while True:
         # 版本号 vK.J：K 是轮次，J 是本轮第几次尝试；当前版本是最近一个通过的版本
-        current = git("describe", "--tags", "--abbrev=0").strip()
+        current = next((h["version"] for h in reversed(history) if h["result"] == "kept"), "v0.0")
+        if git("rev-parse", "HEAD") != git("rev-parse", current):
+            sys.exit(f"HEAD 不在当前版本 {current} 上（可能上次在尝试中途停止），确认后执行 git reset --hard {current}")
         k = int(current[1:].split(".")[0]) + 1
         j = sum(h["version"].startswith(f"v{k}.") for h in history)
         if k > MAX_ROUNDS or j >= MAX_TRIES:
@@ -139,6 +141,7 @@ def main():
         print(json.dumps(entry, ensure_ascii=False))
 
     print(f"停止。当前版本：{current}。在测试集上比较 {current} 和 v0.0 的工作由人完成。")
+
 
 if __name__ == "__main__":
     main()

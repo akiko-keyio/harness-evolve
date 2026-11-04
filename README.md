@@ -48,26 +48,28 @@ token 消耗和步数只做记录，不参与判断。
 
 每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试（J 从 0 开始），v0.0 是初始版本。只有修改被保留，才进入下一轮。
 
-- **git** 只保存通过检查的版本，以版本号为标签，例如用 `git diff v0.0 v2.0` 查看两个版本之间的改动。
-- **runs/** 保存每次尝试的记录，包括没有通过的。这些文件由程序生成，不提交到 git。
+- **git** 保存每次尝试的代码，以版本号为标签。当前分支只包含被保留的版本，没有保留的尝试通过标签访问，例如 `git diff v1.0 v2.0`。
+- **runs/** 保存进度、得分和轨迹。这些文件由程序生成，不提交到 git。
 
 ```
 runs/
-├── history.jsonl             每次尝试一行：基于哪个版本、问题、修改、是否保留及原因
+├── history.jsonl            进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
 ├── v0.0/
-│   ├── train/                初始版本在训练集上的评测结果
-│   └── val/                  初始版本在验证集上的评测结果
+│   ├── scores/              train.jsonl、val.jsonl
+│   └── trajectory/          train/、val/
 └── v1.0/
-    ├── proposer/
-    │   ├── trajectory.jsonl  proposer 的轨迹
-    │   └── proposal.json     找出的问题、修改说明和 targets
-    ├── change.diff           代码改动
-    ├── train_targets/        训练集检查：重新运行 targets 的评测结果
-    ├── val/                  验证集检查：评测结果，以及检查结论 check.json
-    └── train/                通过后，整个训练集的评测结果
+    ├── proposal.json        proposer 找出的问题、修改说明和 targets
+    ├── scores/              得分：每行一道题的 correct、tokens、steps
+    │   ├── bad-case.jsonl   训练集检查：重新运行 targets
+    │   ├── val.jsonl        验证集检查
+    │   ├── val_check.json   验证集检查的结论：p 值、正确率、平均成本
+    │   └── train.jsonl      通过后，整个训练集
+    └── trajectory/          轨迹
+        ├── proposer.jsonl
+        ├── bad-case/
+        ├── val/
+        └── train/
 ```
-
-每个评测结果目录的格式相同：`results.jsonl` 记录每道题的得分和成本，`trajectories/` 保存每道题的 agent 轨迹。
 
 ## 使用
 
