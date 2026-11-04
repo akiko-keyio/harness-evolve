@@ -3,7 +3,6 @@
 在被优化的项目根目录运行：python evolve.py
 中途停止后再次运行，会从上次的进度继续。
 """
-import fnmatch
 import json
 import math
 import subprocess
@@ -11,10 +10,9 @@ import sys
 from pathlib import Path
 
 # ---------- 配置 ----------
-HARNESS = ["agent/prompts/*.md", "agent/tools.py"]  # 允许 proposer 修改的文件（glob）
-# 评测命令：输出 {out}/results.jsonl（每行 {"qid", "correct": 0/1, "tokens", "steps"}）和 {out}/traces/（每题一个轨迹文件，文件名包含题号）
-EVAL = "python eval/run.py --split {split} --out {out}"
-EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加，qids 为逗号分隔的题号
+HARNESS = "harness/"  # harness 文件夹，proposer 只能修改其中的文件（规范见 SPEC.md）
+EVAL = "python eval.py --split {split} --out {out}"  # 评测脚本（规范见 SPEC.md）
+EVAL_QIDS = " --qids {qids}"  # 只运行部分题时追加
 PROPOSER = ["pi", "--mode", "json", "--no-session", "--model", "claude-opus-4-6",
             "--tools", "read,grep,find,ls,edit,write", "-p"]  # 最后追加 prompt
 ALPHA = 0.05        # 显著性水平
@@ -59,20 +57,21 @@ def attempt(current, new):
 
     # 1. proposer 修改 harness
     prompt = PROMPT.read_text(encoding="utf-8")
-    for k, v in {"{current}": current, "{new}": new, "{harness}": ", ".join(HARNESS)}.items():
+    for k, v in {"{current}": current, "{new}": new, "{harness}": HARNESS}.items():
         prompt = prompt.replace(k, v)
     with open(d / "proposer_trace.jsonl", "w", encoding="utf-8") as f:
         subprocess.run(PROPOSER + [prompt], stdout=f, check=True)
-    (d / "change.diff").write_text(git("diff"), encoding="utf-8")
+    git("add", "-A")  # 暂存全部改动，包括新建和删除的文件（runs/ 被 .gitignore 忽略）
+    (d / "change.diff").write_text(git("diff", "--cached"), encoding="utf-8")
 
     def reject(reason):
-        git("restore", ".")
-        git("clean", "-fdq")  # 删除新建的文件（runs/ 被 .gitignore 忽略，不受影响）
+        git("reset", "-q", "--hard")
+        git("clean", "-fdq")
         return {"result": "rejected", "reason": reason}
 
     status = git("status", "--porcelain").splitlines()
-    if not status or not all(s[:2] == " M" and any(fnmatch.fnmatch(s[3:], p) for p in HARNESS) for s in status):
-        return reject("没有修改，或者改动了 harness 文件以外的文件")
+    if not status or not all(s[3:].strip('"').startswith(HARNESS) for s in status):
+        return reject("没有修改，或者改动了 harness 文件夹以外的文件")
     try:
         proposal = json.loads((d / "proposal.json").read_text(encoding="utf-8"))
         targets = [str(q) for q in proposal["targets"]]
@@ -107,7 +106,7 @@ def attempt(current, new):
 
     # 4. 保留：在整个训练集上运行，供下一次分析
     evaluate("train", d / "eval_train")
-    git("commit", "-qam", new)
+    git("commit", "-qm", new)
     git("tag", new)
     return entry | {"result": "kept"}
 

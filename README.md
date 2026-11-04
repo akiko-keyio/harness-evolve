@@ -9,16 +9,14 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
 
 ## 流程
 
-1. 由人把评测数据集分为三份：
-   - **train set**（训练集）：用于分析错误案例，以便改进 harness。
-   - **validation set**（验证集）：用来判断修改是否有效。
-   - **test set**（测试集）：优化过程中不使用，全部结束后由人确认最终效果。
-
-   来源相同的题（例如同一个视频的多道题）放在同一份里。
-2. 由人准备评测脚本和 harness 文件，填进 `evolve.py` 开头的配置：
-   - **评测脚本**：在指定的数据集上运行 agent，输出每道题的结果和轨迹，格式见[评测脚本](#评测脚本)。
-   - **harness 文件**：允许 proposer 修改的文件，例如 `agent/prompts/*.md`。
-3. `evolve.py` 运行初始版本 v0.0，得到训练集和验证集上的结果，然后循环：
+1. 把评测数据集分为三份：
+   1. train set（训练集）：用于分析错误案例以便改进 harness。
+   2. validation set（验证集）：用于判断改进是否真实有效。
+   3. test set（测试集）：用于确认最终效果。
+2. 按[规范](SPEC.md)提供初始 harness 文件夹和 `eval.py`：
+   1. 初始 harness 文件夹：包含所有待优化的 harness 代码。
+   2. 评测脚本：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
+3. 运行 `evolve.py`：先评测初始版本 v0.0，然后循环：
 
    ```
    for 每一轮:
@@ -30,23 +28,7 @@ harness-evolve 是一个极简的 harness 改进循环：模型固定，反复�
        如果本轮所有尝试都没有通过，停止
    ```
 
-4. 由人在测试集上比较最终的当前版本和 v0.0。
-
-## 评测脚本
-
-调用方式：
-
-```
-python eval/run.py --split train --out runs/v0.0/eval_train [--qids q1,q2]
-```
-
-`--split` 取 train 或 val，`--qids` 表示只运行这些题。输出：
-
-```
-<out>/
-├── results.jsonl   每行一道题，例如 {"qid": "q1", "correct": 1, "tokens": 5230, "steps": 7}
-└── traces/         每道题一个轨迹文件，例如 q1.json
-```
+4. 在测试集上比较最终的当前版本和 v0.0。
 
 ## 验证集检查
 
@@ -88,6 +70,6 @@ runs/
 ## 使用
 
 1. 安装 pi：`npm install -g @earendil-works/pi-coding-agent`，并配置好模型的 API key。
-2. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，完成流程中的第 1、2 步。
+2. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，按 [SPEC.md](SPEC.md) 准备好数据集、harness 文件夹和 `eval.py`，并在 `evolve.py` 开头填写配置。
 3. 在专用分支上提交当前代码，把 `runs/` 加入 `.gitignore`。
 4. 运行 `python evolve.py`。中途停止后再次运行，会从上次的进度继续。

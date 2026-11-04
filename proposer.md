@@ -4,7 +4,7 @@
 
 ## 可以读的
 
-- harness 文件：{harness}
+- harness 文件夹：`{harness}`
 - `runs/history.jsonl`：以前每次尝试一行，包括基于哪个版本、找出的问题、修改说明、是否保留及原因
 - `runs/<版本>/change.diff`：每次尝试的代码改动，包括没有保留的
 - `runs/<版本>/eval_train/`：被保留的版本在训练集上的结果。`results.jsonl` 每行一道题（`qid`、`correct`、`tokens`、`steps`），`traces/` 中是每道题的轨迹
@@ -14,7 +14,8 @@
 ## 不要做的
 
 - 不要读 `eval_val/`、`check_val.json` 和测试集。
-- 只修改 harness 文件，不新建或删除文件。
+- 只修改 harness 文件夹内的文件，可以新建或删除。
+- 不要改变 harness 被评测脚本调用的接口。
 - 不要写只对个别题目或特定数据成立的规则。
 - 不要重复以前没有通过的问题和改法。
 
