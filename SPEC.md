@@ -7,8 +7,7 @@ project/
 ├── harness/        初始 harness 文件夹：所有待优化的 harness 代码
 ├── eval.py         评测脚本
 ├── data/           评测数据集
-├── evolve.py
-└── proposer.md
+└── .gitignore      包含 runs/
 ```
 
 ## 评测数据集
@@ -26,6 +25,7 @@ project/
 - 包含所有待优化的 harness 代码：system prompt、工具、上下文管理等。proposer 只能修改这个文件夹内的文件。
 - 对外提供一个固定的入口，供 `eval.py` 调用。proposer 不能改变入口的参数和返回格式。
 - 评测脚本和数据集不放在这个文件夹里。
+- 运行时生成的文件（例如 `__pycache__/`、缓存）加入 `.gitignore`，否则会被当作 harness 的改动提交。
 
 示例：
 
@@ -68,14 +68,15 @@ python eval.py --split train --scores runs/v0.0/scores/train.jsonl --trajectory 
 
 轨迹文件要包含 proposer 分析错误所需的全部信息：题目、标准答案、agent 的完整消息和工具调用、最终答案。
 
+harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。只有评测脚本自身出错时才以非零状态退出，此时 `evolve.py` 会停止。
+
 示例 `eval.py`：
 
 ```python
 import argparse
 import json
+import traceback
 from pathlib import Path
-
-from harness.agent import run
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--split", choices=["train", "val", "test"], required=True)
@@ -93,7 +94,11 @@ traj_dir = Path(args.trajectory)
 traj_dir.mkdir(parents=True, exist_ok=True)
 with open(args.scores, "w") as f:
     for q in questions:
-        r = run(q)
+        try:
+            from harness.agent import run  # 在 try 中导入：harness 有语法错误时，也只是记为答错
+            r = run(q)
+        except Exception:
+            r = {"answer": None, "tokens": 0, "steps": 0, "trajectory": traceback.format_exc()}
         correct = int(r["answer"] == q["answer"])
         f.write(json.dumps({"qid": q["qid"], "correct": correct,
                             "tokens": r["tokens"], "steps": r["steps"]}) + "\n")
@@ -101,4 +106,3 @@ with open(args.scores, "w") as f:
         (traj_dir / f"{q['qid']}.json").write_text(json.dumps(traj, ensure_ascii=False, indent=2))
 ```
 
-单道题运行出错时，记为答错并把错误信息写进轨迹，不要让整个脚本退出。

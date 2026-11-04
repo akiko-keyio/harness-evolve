@@ -19,9 +19,9 @@ harness-evolve 是一个极简的 harness 改进循环。
 3. 运行 `evolve.py`：先评测初始版本 v0.0，然后循环：
 
    ```
-   for 每一轮:
-       for 本轮的每次尝试:
-           1. proposer 阅读以前各次尝试的记录和当前版本在训练集上的轨迹，修改 harness
+   for 每一轮（最多 5 轮）:
+       for 本轮的每次尝试（最多 3 次）:
+           1. proposer 阅读以前各次尝试的记录和当前版本在训练集上的轨迹，修改 harness（只采纳 harness 文件夹内的改动）
            2. 训练集检查：重新运行 proposer 列出的错题，一道都没变对，撤销，再试一次
            3. 验证集检查：验证集上的正确率没有显著高于当前版本，撤销，再试一次
            4. 两项都通过：保留修改，作为新的当前版本；在整个训练集上运行它，供下一轮分析；进入下一轮
@@ -80,6 +80,8 @@ runs/
 ## 使用
 
 1. 安装 pi：`npm install -g @earendil-works/pi-coding-agent`，并配置好模型的 API key。
-2. 把 `evolve.py` 和 `proposer.md` 放到项目根目录，按 [SPEC.md](SPEC.md) 准备好数据集、harness 文件夹和 `eval.py`，并在 `evolve.py` 开头填写配置。
-3. 在专用分支上提交当前代码，把 `runs/` 加入 `.gitignore`。
-4. 运行 `python evolve.py`。中途停止后再次运行，会从上次的进度继续。
+2. 按 [SPEC.md](SPEC.md) 准备项目：数据集、harness 文件夹和 `eval.py`。把 `runs/` 加入 `.gitignore`，在专用分支上提交。
+3. 在 `evolve.py` 开头填写配置。
+4. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。中途停止后再次运行，会丢弃没有完成的那次尝试，从它重新开始。
+
+运行期间，项目中受 git 管理的文件只有 harness 文件夹会改变，其他文件在每次尝试前都会恢复原样。因此 `evolve.py` 和 `proposer.md` 放在项目之外，停止后可以随时修改再继续。
