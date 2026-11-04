@@ -33,7 +33,8 @@ harness-evolve 是一个极简的 harness 改进循环。
        if 本轮没有保留修改: break
    return 当前 harness
    ```
-4. 在测试集上比较最终的当前版本和 v0.0。
+
+4. 在 test set 上比较最终的 harness 和初始 harness。
 
 ## 验证集检查
 
