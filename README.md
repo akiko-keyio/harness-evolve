@@ -22,25 +22,21 @@ harness-evolve 是一个极简的 harness 改进循环。
 3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`：
 
    ```
-   Input:  initial harness, train set, validation set, proposer,
-           max rounds K, max tries per round J
-   Init:   current ← initial harness
-           evaluate current on train set and validation set
+   输入：初始 harness、训练集、验证集、proposer、
+         轮数上限 K、每轮提交上限 J
+   初始化：current ← 初始 harness，在训练集和验证集上评测
 
-   for k = 1 … K:
-       candidate ← copy of current
-       for j = 1 … J:                                ▷ version vk.j
-           proposer edits candidate, knowing why
-               its previous submission failed
-           if candidate is not significantly better
-                   than current on train set:        ▷ train check
+   for k = 1 … K:                             ▷ 新的一轮，新的会话
+       candidate ← current 的副本
+       for j = 1 … J:                         ▷ 版本 vk.j
+           proposer 修改 candidate            ▷ 接续会话，知道上次为何没通过
+           if 训练集上没有显著优于 current:   ▷ 训练集检查
+               continue                       ▷ 下次接着改 candidate
+           if 验证集上没有显著优于 current:   ▷ 验证集检查
                continue
-           if candidate is not significantly better
-                   than current on validation set:   ▷ validation check
-               continue
-           current ← candidate                       ▷ keep
+           current ← candidate                ▷ 保留
            break
-       if no candidate is kept in round k:
+       if 本轮没有保留:
            break
    return current
    ```
@@ -49,47 +45,28 @@ harness-evolve 是一个极简的 harness 改进循环。
 
 ## 检查
 
-训练集检查和验证集检查用的是同一个检验。正确率提升可能源于 proposer 的修改，也可能是偶然波动，所以采用单侧精确 McNemar 检验，逐题比较当前版本 C 和修改后的版本 N。
-
-训练集检查确认修改在 proposer 分析过的题上确实有效，变错的题和变对的题一样计入；验证集检查确认这个效果在没见过的题上也成立。
-
-记 $c$ 为变对（C 答错、N 答对）的题数，$b$ 为变错（C 答对、N 答错）的题数，$n = b + c$，那么假如修改无效，仍然出现至少 $c$ 道题变对的概率为：
+训练集检查和验证集检查都用单侧精确 McNemar 检验，逐题比较当前版本 C 和候选 N。记 $c$ 为变对（C 错 N 对）的题数，$b$ 为变错（C 对 N 错）的题数，$n = b + c$：
 
 $$
 p = \sum_{i=c}^{n} \binom{n}{i} \left(\frac{1}{2}\right)^{n}
 $$
 
-$p < 0.05$ 表示这个结果很难用偶然解释，检查通过。
-
-这是针对单次比较的检验。同一个验证集会被反复用来挑选候选，同一来源的题目之间也相互关联，所以整个优化过程的误报率会高于 5%，最终效果以 test set 为准。
-
-token 消耗和步数只做记录，不参与判断。
+$p < \alpha$ 时通过，$\alpha$ 在 `evolve.json` 中设置。
 
 ## 记录
 
-每次提交都有一个版本号 vK.J，表示第 K 轮的第 J 次提交，v0.0 是初始版本。同一轮中，每次提交都接着上一次提交修改，proposer 能看到上一次没有通过的原因；修改被保留后，进入下一轮，从新的当前版本重新开始。同一轮的提交可以接续同一个 proposer 会话，见 [SPEC](SPEC.md)。
-
-所有记录都在 `runs/` 中。项目中的 harness 文件夹不会被修改，最终版本的 harness 在 `runs/candidates/<版本>/` 中。
+v0.0 是初始版本，vK.J 是第 K 轮的第 J 次提交。
 
 ```
 runs/
-├── history.jsonl          进度：每次提交一行（版本、从哪个版本复制、问题、修改、训练集上变对和变错的题数、是否保留及原因）
-├── eval_hash.txt          评测方式的哈希，改过评测方式就停止运行
+├── history.jsonl          每次提交一行：版本、问题、修改、结果
+├── eval_hash.txt          评测方式的哈希
+├── sessions/              proposer 会话（可选）
 ├── candidates/<版本>/
 │   ├── harness/           这个版本的 harness 代码
-│   ├── proposal.json      proposer 的产出：问题、修改说明、预期修好的题
+│   ├── proposal.json      proposer 的提议
 │   └── proposer.jsonl     proposer 的轨迹
-├── train/<版本>/
-│   ├── check.json         训练集检查的结论，包括变对和变错的题号
-│   ├── scores.jsonl
-│   └── trajectory/
-├── val/<版本>/
-│   ├── check.json         验证集检查的结论
-│   ├── scores.jsonl
-│   └── trajectory/
-└── test/<版本>/           final 的结果
+├── train/<版本>/          训练集结果：check.json、scores.jsonl、trajectory/
+├── val/<版本>/            验证集结果：check.json、scores.jsonl、trajectory/
+└── test/<版本>/           测试集结果（final）
 ```
-
-每个评测结果都是一个 `scores.jsonl`（每行一道题的 correct、tokens、steps）和一个 `trajectory/`（每道题一个 agent 轨迹文件）。某一步没有通过，之后的结果就不会生成。
-
-Proposer 在沙箱中只能看到 `history.jsonl`、`candidates/` 和 `train/`，只能修改本次版本的 `candidates/<版本>/`。
