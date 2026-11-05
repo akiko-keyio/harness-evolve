@@ -22,27 +22,21 @@ harness-evolve 是一个极简的 harness 改进循环。
 3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`：
 
    ```
-   输入：初始 harness、训练集、验证集、proposer、
-         轮数上限 K、每轮提交上限 J
-   初始化：当前版本 ← 初始 harness
-           在训练集和验证集上评测当前版本
-
-   for k = 1 … K:                             ▷ 新的一轮，新的会话
-       for j = 1 … J:
-           新版本 vk.j ← 本轮上一个版本的副本 ▷ 本轮第一次为当前版本
-           proposer 修改新版本                ▷ 接续会话，知道上次为何没通过
-           if 训练集上没有显著优于当前版本:   ▷ 训练集检查
-               continue
-           if 验证集上没有显著优于当前版本:   ▷ 验证集检查
-               continue
-           当前版本 ← 新版本                  ▷ 保留
-           break
-       if 本轮没有保留:
-           break
-   return 当前版本
+   当前版本 ← 初始 harness
+   for 每一轮（最多 K 轮）:
+       for 每次提交（最多 J 次）:
+           proposer 修改 harness，生成新版本
+           if 新版本在训练集和验证集上都显著优于当前版本:
+               当前版本 ← 新版本
+               进入下一轮
+       if 本轮没有新版本被保留:
+           停止
    ```
 
-4. 运行 `python <harness-evolve 目录>/evolve.py final`，在 test set 上比较最终的 harness 和初始 harness。之后不能再继续优化。
+   - 同一轮中，proposer 接着上一次提交修改，并知道上一次为什么没通过；可以接续同一个会话。
+   - 先做训练集检查，通过后才做验证集检查。
+
+4. 优化完成后，运行 `python <harness-evolve 目录>/evolve.py final`，在独立的 test set 上比较初始版本和最终版本。
 
 ## 检查
 
