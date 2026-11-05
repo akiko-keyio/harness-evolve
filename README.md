@@ -28,10 +28,10 @@ harness-evolve 是一个极简的 harness 改进循环。
            evaluate current on train set and validation set
 
    for k = 1 … K:
+       candidate ← copy of current
        for j = 1 … J:                                ▷ version vk.j
-           proposer reads history and train results of all versions,
-               edits a copy of current into candidate
-           evaluate candidate on train set
+           proposer edits candidate, knowing why
+               its previous submission failed
            if candidate is not significantly better
                    than current on train set:        ▷ train check
                continue
@@ -67,13 +67,13 @@ token 消耗和步数只做记录，不参与判断。
 
 ## 记录
 
-每次尝试都有一个版本号 vK.J，表示第 K 轮的第 J 次尝试，v0.0 是初始版本。只有修改被保留，才进入下一轮。
+每次提交都有一个版本号 vK.J，表示第 K 轮的第 J 次提交，v0.0 是初始版本。同一轮中，每次提交都接着上一次提交修改，proposer 能看到上一次没有通过的原因；修改被保留后，进入下一轮，从新的当前版本重新开始。同一轮的提交可以接续同一个 proposer 会话，见 [SPEC](SPEC.md)。
 
 所有记录都在 `runs/` 中。项目中的 harness 文件夹不会被修改，最终版本的 harness 在 `runs/candidates/<版本>/` 中。
 
 ```
 runs/
-├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、训练集上变对和变错的题数、是否保留及原因）
+├── history.jsonl          进度：每次提交一行（版本、从哪个版本复制、问题、修改、训练集上变对和变错的题数、是否保留及原因）
 ├── eval_hash.txt          评测方式的哈希，改过评测方式就停止运行
 ├── candidates/<版本>/
 │   ├── harness/           这个版本的 harness 代码

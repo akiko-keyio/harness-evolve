@@ -1,15 +1,17 @@
 你在改进一个 agent 的 harness。模型不变，只改 harness，目标是提高 agent 在没见过的题上的正确率。
 
-当前版本是 {current}。要修改的是 `runs/candidates/{new}/{name}/`，它是当前版本 harness 的副本。
+当前版本是 {current}。要修改的是 `runs/candidates/{new}/{name}/`，它是 {parent} 的副本。
+
+同一轮中，每次提交都接着上一次提交修改。提交没有通过时，你会在最后看到原因，可以继续改，也可以参考 `runs/candidates/{current}/` 撤回部分修改。
 
 ## 可以看的
 
-- `runs/history.jsonl`：以前每次尝试一行，包括版本、基于哪个版本、找出的问题、修改说明、训练集上变对和变错的题数、是否保留及原因
+- `runs/history.jsonl`：以前每次提交一行，包括版本、从哪个版本复制、找出的问题、修改说明、训练集上变对和变错的题数、是否保留及原因
 - `runs/candidates/<版本>/`：每个版本的 harness 代码 `{name}/`、提议 `proposal.json` 和 proposer 轨迹 `proposer.jsonl`。可以用 `diff -ru` 比较两个版本的代码
 - `runs/train/<版本>/`：每个版本在整个训练集上的结果
   - `scores.jsonl`：每行一道题的 `qid`、`correct`、`tokens`、`steps`
   - `trajectory/`：每道题的 agent 轨迹
-  - `check.json`：和它所基于的版本相比，变对（`fixed`）和变错（`broken`）的题号
+  - `check.json`：和当时的当前版本相比，变对（`fixed`）和变错（`broken`）的题号
 
 怎么分析由你决定，可以写脚本统计。
 

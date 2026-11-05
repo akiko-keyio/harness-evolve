@@ -34,7 +34,7 @@ DEFAULTS = {
     ],
     "alpha": 0.05,         # 显著性水平
     "max_rounds": 5,       # 最多轮数：每保留一次修改，进入下一轮
-    "max_tries": 3,        # 每轮最多尝试次数：一轮都没有通过，停止
+    "max_tries": 3,        # 每轮最多提交次数：一轮都没有通过，停止
 }
 
 RUNS = Path("runs")
@@ -125,18 +125,22 @@ def rejected(reason):
     return {"result": "rejected", "reason": reason}
 
 
-def attempt(current, new):
+def attempt(current, new, previous):
+    """previous 是本轮上一次提交的记录；本轮第一次提交时为 None。"""
     cand = RUNS / "candidates" / new
+    parent = previous["version"] if previous else current  # 同一轮的提交接着上一次提交修改
 
-    # 1. proposer 在当前版本的副本上修改 harness；proposer.jsonl 存在表示这一步已完成
+    # 1. proposer 在 parent 的副本上修改 harness；proposer.jsonl 存在表示这一步已完成
     if not (cand / "proposer.jsonl").exists():
         for d in (cand, result_dir(new, "train"), result_dir(new, "val")):
             shutil.rmtree(d, ignore_errors=True)
-        shutil.copytree(harness_dir(current), harness_dir(new))
+        shutil.copytree(harness_dir(parent), harness_dir(new))
         prompt = PROMPT.read_text(encoding="utf-8")
         if CFG["task"]:
             prompt += "\n\n" + Path(CFG["task"]).read_text(encoding="utf-8")
-        for k, v in {"{current}": current, "{new}": new, "{name}": Path(CFG["harness"]).name}.items():
+        if previous:
+            prompt += f"\n\n## 上一次提交\n\n{parent} 没有通过：{previous['reason']}。{new} 是 {parent} 的副本，可以接着修改。"
+        for k, v in {"{current}": current, "{parent}": parent, "{new}": new, "{name}": Path(CFG["harness"]).name}.items():
             prompt = prompt.replace(k, v)
         user = f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "0:0"
         with open(cand / "proposer.tmp", "w", encoding="utf-8") as f:
@@ -145,17 +149,17 @@ def attempt(current, new):
         (cand / "proposer.tmp").replace(cand / "proposer.jsonl")
 
     # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本在训练集上的错题
-    if same_tree(harness_dir(current), harness_dir(new)):
-        return rejected("没有修改 harness")
+    if same_tree(harness_dir(parent), harness_dir(new)):
+        return {"parent": parent} | rejected("没有修改 harness")
     try:
         proposal = json.loads((cand / "proposal.json").read_text(encoding="utf-8"))
-        entry = {"problem": proposal["problem"], "change": proposal["change"]}
+        entry = {"parent": parent, "problem": proposal["problem"], "change": proposal["change"]}
         targets = proposal["targets"]
         if not isinstance(targets, list):
             raise TypeError
         targets = sorted(set(targets))
     except (OSError, ValueError, KeyError, TypeError):
-        return rejected("proposal.json 缺失或格式不对")
+        return {"parent": parent} | rejected("proposal.json 缺失或格式不对")
     wrong = {q for q, r in scores(current, "train").items() if r["correct"] == 0}
     if not targets or not set(targets) <= wrong:
         return entry | rejected("targets 要是当前版本在训练集上答错的题号")
@@ -168,15 +172,16 @@ def attempt(current, new):
     # 3. 训练集检查：在整个训练集上，正确率显著高于当前版本
     check = compare(scores(current, "train"), evaluate(new, "train"))
     (result_dir(new, "train") / "check.json").write_text(json.dumps(check, indent=2))
-    entry["train"] = {"fixed": len(check["fixed"]), "broken": len(check["broken"])}
+    fixed, broken = len(check["fixed"]), len(check["broken"])
+    entry["train"] = {"fixed": fixed, "broken": broken}
     if not check["pass"]:
-        return entry | rejected("训练集检查未通过：正确率没有显著提高")
+        return entry | rejected(f"训练集检查未通过：和 {current} 相比变对 {fixed} 题、变错 {broken} 题，p={check['p_value']}")
 
     # 4. 验证集检查：在验证集上，正确率也显著高于当前版本
     check = compare(scores(current, "val"), evaluate(new, "val"))
     (result_dir(new, "val") / "check.json").write_text(json.dumps(check, indent=2))
     if not check["pass"]:
-        return entry | rejected("验证集检查未通过：正确率没有显著提高")
+        return entry | rejected("训练集检查通过，但验证集检查未通过：正确率没有显著提高")
     return entry | {"result": "kept"}
 
 
@@ -214,7 +219,7 @@ def main():
         (RUNS / "eval_hash.txt").write_text(eval_hash())
     elif (RUNS / "eval_hash.txt").read_text() != eval_hash():
         sys.exit("评测方式改过了（eval 或 eval_files），旧结果不能再用，请把 runs/ 改名后重新开始")
-    for d in ("train", "val"):
+    for d in ("train", "val", "sessions"):  # sessions/：proposer 会话文件，可选
         (RUNS / d).mkdir(exist_ok=True)
     HISTORY.touch()
     for split in ("train", "val"):
@@ -222,7 +227,7 @@ def main():
 
     history = [json.loads(line) for line in HISTORY.read_text(encoding="utf-8").splitlines()]
     while True:
-        # 版本号 vK.J：K 是轮次，J 是本轮第几次尝试；当前版本是最近一个被保留的版本
+        # 版本号 vK.J：K 是轮次，J 是本轮第几次提交；当前版本是最近一个被保留的版本
         current = next((h["version"] for h in reversed(history) if h["result"] == "kept"), "v0.0")
         if sys.argv[1:] == ["final"]:
             return final(current)
@@ -234,7 +239,8 @@ def main():
             print("当前版本在训练集上已经全部答对")
             break
         new = f"v{k}.{j + 1}"
-        entry = {"version": new, "base": current} | attempt(current, new)
+        previous = next((h for h in reversed(history) if h["version"].startswith(f"v{k}.")), None)
+        entry = {"version": new} | attempt(current, new, previous)
         history.append(entry)
         with open(HISTORY, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")

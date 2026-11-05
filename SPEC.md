@@ -16,7 +16,7 @@ project/
 
 划分为 train、val、test 三份，由评测脚本按 `--split` 读取。来源相同的题（例如同一个视频的多道题）放在同一份里，避免信息从训练集泄露到验证集。
 
-每个候选都要在整个 train 上评测一次，train 越大，每次尝试的成本越高。
+每次提交都要在整个 train 上评测一次，train 越大，每次提交的成本越高。
 
 ## harness 文件夹
 
@@ -130,7 +130,7 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 | `proposer` | proposer 命令，参数数组，最后会追加 prompt | 在容器中运行 pi，见 `evolve.py` |
 | `alpha` | 显著性水平 | `0.05` |
 | `max_rounds` | 最多轮数 K | `5` |
-| `max_tries` | 每轮最多尝试次数 J | `3` |
+| `max_tries` | 每轮最多提交次数 J | `3` |
 
 示例：
 
@@ -145,4 +145,6 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 }
 ```
 
-`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{current}` 是当前版本号，`{new}` 是本次版本号，`{user}` 是当前用户。想让同一轮的尝试接续同一个 proposer 会话时，可以用 `{current}` 给会话文件命名。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。`Dockerfile.pi` 让 pi 在容器内最多运行 1 小时，超时或中断后容器会自动删除。
+`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{current}` 是当前版本号，`{new}` 是本次版本号，`{user}` 是当前用户。
+
+同一轮的提交可以接续同一个 proposer 会话，这样 proposer 记得自己之前的分析。会话文件放在 `runs/sessions/` 中，用 `{current}` 命名，同一轮共用一个，保留新版本后自然换新。以 pi 为例，在默认命令中加上 `"-v", "{runs}/sessions:/workspace/runs/sessions"`，并把 `--no-session` 换成 `"--session", "/workspace/runs/sessions/{current}.jsonl"`（参数以实际使用的 pi 版本为准）。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。`Dockerfile.pi` 让 pi 在容器内最多运行 1 小时，超时或中断后容器会自动删除。
