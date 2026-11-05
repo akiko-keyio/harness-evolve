@@ -24,29 +24,29 @@ harness-evolve 是一个极简的 harness 改进循环。
    ```
    输入：初始 harness、训练集、验证集、proposer、
          轮数上限 K、每轮提交上限 J
-   初始化：current ← 初始 harness             ▷ current：当前保留的 harness
-           在训练集和验证集上评测 current
+   初始化：当前版本 ← 初始 harness
+           在训练集和验证集上评测当前版本
 
    for k = 1 … K:                             ▷ 新的一轮，新的会话
-       candidate ← current 的副本             ▷ candidate：本轮的候选 harness
-       for j = 1 … J:                         ▷ 版本 vk.j
-           proposer 修改 candidate            ▷ 接续会话，知道上次为何没通过
-           if 训练集上没有显著优于 current:   ▷ 训练集检查
-               continue                       ▷ 下次接着改 candidate
-           if 验证集上没有显著优于 current:   ▷ 验证集检查
+       for j = 1 … J:
+           新版本 vk.j ← 本轮上一个版本的副本 ▷ 本轮第一次为当前版本
+           proposer 修改新版本                ▷ 接续会话，知道上次为何没通过
+           if 训练集上没有显著优于当前版本:   ▷ 训练集检查
                continue
-           current ← candidate                ▷ 保留
+           if 验证集上没有显著优于当前版本:   ▷ 验证集检查
+               continue
+           当前版本 ← 新版本                  ▷ 保留
            break
        if 本轮没有保留:
            break
-   return current
+   return 当前版本
    ```
 
 4. 运行 `python <harness-evolve 目录>/evolve.py final`，在 test set 上比较最终的 harness 和初始 harness。之后不能再继续优化。
 
 ## 检查
 
-训练集检查和验证集检查都用单侧精确 McNemar 检验，逐题比较当前版本 C 和候选 N。记 $c$ 为变对（C 错 N 对）的题数，$b$ 为变错（C 对 N 错）的题数，$n = b + c$：
+训练集检查和验证集检查都用单侧精确 McNemar 检验，逐题比较当前版本 C 和新版本 N。记 $c$ 为变对（C 错 N 对）的题数，$b$ 为变错（C 对 N 错）的题数，$n = b + c$：
 
 $$
 p = \sum_{i=c}^{n} \binom{n}{i} \left(\frac{1}{2}\right)^{n}
