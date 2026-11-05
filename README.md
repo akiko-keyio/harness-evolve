@@ -24,10 +24,11 @@ harness-evolve 是一个极简的 harness 改进循环。
    ```
    输入：初始 harness、训练集、验证集、proposer、
          轮数上限 K、每轮提交上限 J
-   初始化：current ← 初始 harness，在训练集和验证集上评测
+   初始化：current ← 初始 harness             ▷ current：当前保留的 harness
+           在训练集和验证集上评测 current
 
    for k = 1 … K:                             ▷ 新的一轮，新的会话
-       candidate ← current 的副本
+       candidate ← current 的副本             ▷ candidate：本轮要修改的候选 harness
        for j = 1 … J:                         ▷ 版本 vk.j
            proposer 修改 candidate            ▷ 接续会话，知道上次为何没通过
            if 训练集上没有显著优于 current:   ▷ 训练集检查
@@ -40,7 +41,6 @@ harness-evolve 是一个极简的 harness 改进循环。
            break
    return current
    ```
-
 4. 运行 `python <harness-evolve 目录>/evolve.py final`，在 test set 上比较最终的 harness 和初始 harness。之后不能再继续优化。
 
 ## 检查
