@@ -16,6 +16,8 @@ project/
 
 划分为 train、val、test 三份，由评测脚本按 `--split` 读取。来源相同的题（例如同一个视频的多道题）放在同一份里，避免信息从训练集泄露到验证集。
 
+每个候选都要在整个 train 上评测一次，train 越大，每次尝试的成本越高。
+
 ## harness 文件夹
 
 - 包含所有待优化的 harness 代码：system prompt、工具、上下文管理等。
@@ -45,8 +47,6 @@ harness/
 | `{split}` | train、val 或 test |
 | `{scores}` | 得分文件，每行一道题 |
 | `{trajectory}` | 轨迹目录，每道题一个文件，文件名为题号，例如 `q001.json` |
-
-只运行部分题时，命令后面会追加 `--qids q001,q002`。
 
 得分文件每行的字段：
 
@@ -82,15 +82,12 @@ ap.add_argument("--harness", required=True)
 ap.add_argument("--split", choices=["train", "val", "test"], required=True)
 ap.add_argument("--scores", required=True)
 ap.add_argument("--trajectory", required=True)
-ap.add_argument("--qids")
 args = ap.parse_args()
 
 sys.path.insert(0, str(Path(args.harness).resolve().parent))  # 从指定的 harness 副本导入
 llm = make_llm(model="claude-opus-4-6", temperature=0)  # 你自己的 LLM 客户端：模型和推理参数固定在这里
 
 qids = set(json.load(open("data/splits.json"))[args.split])
-if args.qids:
-    qids &= set(args.qids.split(","))
 questions = [q for q in map(json.loads, open("data/questions.jsonl")) if q["qid"] in qids]
 
 traj_dir = Path(args.trajectory)
@@ -148,4 +145,4 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 }
 ```
 
-`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{new}` 是本次版本号，`{user}` 是当前用户。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。`Dockerfile.pi` 让 pi 在容器内最多运行 1 小时，超时或中断后容器会自动删除。
+`proposer` 中的占位符：`{runs}` 是 `runs/` 的绝对路径，`{current}` 是当前版本号，`{new}` 是本次版本号，`{user}` 是当前用户。想让同一轮的尝试接续同一个 proposer 会话时，可以用 `{current}` 给会话文件命名。默认命令只把 `runs/history.jsonl`、`runs/candidates/` 和 `runs/train/` 挂进容器，其中只有本次版本的 `runs/candidates/<版本>/` 可写。更换模型或 API key 时，复制默认命令修改即可。`Dockerfile.pi` 让 pi 在容器内最多运行 1 小时，超时或中断后容器会自动删除。

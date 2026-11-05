@@ -52,9 +52,8 @@ def harness_dir(version):
     return RUNS / "candidates" / version / Path(CFG["harness"]).name
 
 
-def result_dir(version, name):
-    """targets 的结果在 train/<版本>/targets/，train、val、test 的结果在 <name>/<版本>/。"""
-    return RUNS / "train" / version / "targets" if name == "targets" else RUNS / name / version
+def result_dir(version, split):
+    return RUNS / split / version
 
 
 def read_scores(path):
@@ -66,23 +65,21 @@ def read_scores(path):
     return scores
 
 
-def scores(version, name):
-    return read_scores(result_dir(version, name) / "scores.jsonl")
+def scores(version, split):
+    return read_scores(result_dir(version, split) / "scores.jsonl")
 
 
-def evaluate(version, name, split, qids=None):
-    """评测 version 的 harness；结果已经存在时直接读取。"""
-    d = result_dir(version, name)
+def evaluate(version, split):
+    """在整个 split 上评测 version 的 harness；结果已经存在时直接读取。"""
+    d = result_dir(version, split)
     out, tmp = d / "scores.jsonl", d / "scores.tmp"
     if not out.exists():
         d.mkdir(parents=True, exist_ok=True)
         cmd = fill(CFG["eval"], harness=harness_dir(version), split=split, scores=tmp, trajectory=d / "trajectory")
-        subprocess.run(cmd + (["--qids", ",".join(qids)] if qids else []), check=True, env=ENV)
-        got = read_scores(tmp)  # 格式正确、题号齐全，才作为完整结果保存
-        if qids and got.keys() != set(qids):
-            sys.exit(f"{tmp} 中的题号和要求运行的题号不一致")
+        subprocess.run(cmd, check=True, env=ENV)
+        read_scores(tmp)  # 格式正确才作为完整结果保存
         tmp.replace(out)
-    return scores(version, name)
+    return scores(version, split)
 
 
 def mean(rows, key):
@@ -100,9 +97,9 @@ def compare(before, after):
     """在同一组题上逐题比较两个版本。"""
     if before.keys() != after.keys():
         sys.exit("两个版本评测的题目不一致")
-    fixed = sum(before[q]["correct"] == 0 and after[q]["correct"] == 1 for q in before)
-    broken = sum(before[q]["correct"] == 1 and after[q]["correct"] == 0 for q in before)
-    p = mcnemar_p(fixed, broken)
+    fixed = sorted(q for q in before if before[q]["correct"] == 0 and after[q]["correct"] == 1)
+    broken = sorted(q for q in before if before[q]["correct"] == 1 and after[q]["correct"] == 0)
+    p = mcnemar_p(len(fixed), len(broken))
     result = {"pass": p < CFG["alpha"], "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
     for name, rows in (("before", before), ("after", after)):
         rows = list(rows.values())
@@ -143,7 +140,8 @@ def attempt(current, new):
             prompt = prompt.replace(k, v)
         user = f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "0:0"
         with open(cand / "proposer.tmp", "w", encoding="utf-8") as f:
-            subprocess.run(fill(CFG["proposer"], runs=RUNS.resolve(), new=new, user=user) + [prompt], stdout=f, check=True)
+            cmd = fill(CFG["proposer"], runs=RUNS.resolve(), current=current, new=new, user=user)
+            subprocess.run(cmd + [prompt], stdout=f, check=True)
         (cand / "proposer.tmp").replace(cand / "proposer.jsonl")
 
     # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本在训练集上的错题
@@ -167,21 +165,18 @@ def attempt(current, new):
         if r.returncode != 0:
             return entry | rejected("候选检查未通过：" + (r.stdout + r.stderr).strip()[-300:])
 
-    # 3. 训练集检查：targets 中至少一道题变对
-    after = evaluate(new, "targets", "train", targets)
-    fixed = sum(after.get(q, {}).get("correct") == 1 for q in targets)
-    (result_dir(new, "train") / "check.json").write_text(json.dumps({"pass": fixed > 0, "fixed": fixed}, indent=2))
-    if fixed == 0:
-        return entry | rejected("训练集检查未通过：targets 中没有一道题变对")
+    # 3. 训练集检查：在整个训练集上，正确率显著高于当前版本
+    check = compare(scores(current, "train"), evaluate(new, "train"))
+    (result_dir(new, "train") / "check.json").write_text(json.dumps(check, indent=2))
+    entry["train"] = {"fixed": len(check["fixed"]), "broken": len(check["broken"])}
+    if not check["pass"]:
+        return entry | rejected("训练集检查未通过：正确率没有显著提高")
 
-    # 4. 验证集检查：正确率显著高于当前版本
-    check = compare(scores(current, "val"), evaluate(new, "val", "val"))
+    # 4. 验证集检查：在验证集上，正确率也显著高于当前版本
+    check = compare(scores(current, "val"), evaluate(new, "val"))
     (result_dir(new, "val") / "check.json").write_text(json.dumps(check, indent=2))
     if not check["pass"]:
         return entry | rejected("验证集检查未通过：正确率没有显著提高")
-
-    # 5. 保留：在整个训练集上评测，供下一轮分析
-    evaluate(new, "train", "train")
     return entry | {"result": "kept"}
 
 
@@ -189,7 +184,7 @@ def final(current):
     """在测试集上比较初始版本和当前版本。"""
     if current == "v0.0":
         sys.exit("没有保留任何修改")
-    check = compare(evaluate("v0.0", "test", "test"), evaluate(current, "test", "test"))
+    check = compare(evaluate("v0.0", "test"), evaluate(current, "test"))
     (result_dir(current, "test") / "check.json").write_text(json.dumps(check, indent=2))
     print(json.dumps(check, indent=2))
 
@@ -223,7 +218,7 @@ def main():
         (RUNS / d).mkdir(exist_ok=True)
     HISTORY.touch()
     for split in ("train", "val"):
-        evaluate("v0.0", split, split)
+        evaluate("v0.0", split)
 
     history = [json.loads(line) for line in HISTORY.read_text(encoding="utf-8").splitlines()]
     while True:
@@ -234,6 +229,9 @@ def main():
         k = int(current[1:].split(".")[0]) + 1
         j = sum(h["version"].startswith(f"v{k}.") for h in history)
         if k > CFG["max_rounds"] or j >= CFG["max_tries"]:
+            break
+        if all(r["correct"] for r in scores(current, "train").values()):
+            print("当前版本在训练集上已经全部答对")
             break
         new = f"v{k}.{j + 1}"
         entry = {"version": new, "base": current} | attempt(current, new)

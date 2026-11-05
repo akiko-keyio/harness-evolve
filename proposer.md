@@ -4,14 +4,14 @@
 
 ## 可以看的
 
-- `runs/history.jsonl`：以前每次尝试一行，包括版本、基于哪个版本、找出的问题、修改说明、是否保留及原因
+- `runs/history.jsonl`：以前每次尝试一行，包括版本、基于哪个版本、找出的问题、修改说明、训练集上变对和变错的题数、是否保留及原因
 - `runs/candidates/<版本>/`：每个版本的 harness 代码 `{name}/`、提议 `proposal.json` 和 proposer 轨迹 `proposer.jsonl`。可以用 `diff -ru` 比较两个版本的代码
-- `runs/train/<版本>/`：训练集上的结果
-  - `check.json`：训练集检查的结论
-  - `targets/`：重新运行 targets 的结果
-  - `scores.jsonl`、`trajectory/`：整个训练集的结果，只有被保留的版本才有
+- `runs/train/<版本>/`：每个版本在整个训练集上的结果
+  - `scores.jsonl`：每行一道题的 `qid`、`correct`、`tokens`、`steps`
+  - `trajectory/`：每道题的 agent 轨迹
+  - `check.json`：和它所基于的版本相比，变对（`fixed`）和变错（`broken`）的题号
 
-每个结果都是一个得分文件 `scores.jsonl`（每行一道题：`qid`、`correct`、`tokens`、`steps`）和一个轨迹目录 `trajectory/`（每道题一个文件）。怎么分析由你决定，可以写脚本统计。
+怎么分析由你决定，可以写脚本统计。
 
 ## 不要做的
 
@@ -32,7 +32,7 @@
 
 你结束后，修改要通过两项检查才会保留：
 
-1. 重新运行 `targets` 中的题，至少一道变对。
-2. 在你看不到的验证集上，正确率显著高于当前版本。
+1. 在整个训练集上，正确率显著高于当前版本。
+2. 在你看不到的验证集上，正确率也显著高于当前版本。
 
-所以修改要解决问题本身，而不只是修好你读过的那几道题。
+变错的题和变对的题一样计入，所以修改要解决问题本身，不能以弄坏其他题为代价。

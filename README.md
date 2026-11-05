@@ -29,15 +29,16 @@ harness-evolve 是一个极简的 harness 改进循环。
 
    for k = 1 … K:
        for j = 1 … J:                                ▷ version vk.j
-           proposer reads history and current's train trajectories,
-               edits a copy of current into candidate, and lists targets
-           if no target is fixed:                    ▷ train check
+           proposer reads history and train results of all versions,
+               edits a copy of current into candidate
+           evaluate candidate on train set
+           if candidate is not significantly better
+                   than current on train set:        ▷ train check
                continue
            if candidate is not significantly better
                    than current on validation set:   ▷ validation check
                continue
            current ← candidate                       ▷ keep
-           evaluate current on train set             ▷ for next round
            break
        if no candidate is kept in round k:
            break
@@ -46,9 +47,11 @@ harness-evolve 是一个极简的 harness 改进循环。
 
 4. 运行 `python <harness-evolve 目录>/evolve.py final`，在 test set 上比较最终的 harness 和初始 harness。之后不能再继续优化。
 
-## 验证集检查
+## 检查
 
-验证集上的正确率提升，可能源于 proposer 的修改，也可能是偶然波动。为了检验提升是否显著，我们采用单侧精确 McNemar 检验，在验证集上逐题比较当前版本 C 和修改后的版本 N。
+训练集检查和验证集检查用的是同一个检验。正确率提升可能源于 proposer 的修改，也可能是偶然波动，所以采用单侧精确 McNemar 检验，逐题比较当前版本 C 和修改后的版本 N。
+
+训练集检查确认修改在 proposer 分析过的题上确实有效，变错的题和变对的题一样计入；验证集检查确认这个效果在没见过的题上也成立。
 
 记 $c$ 为变对（C 答错、N 答对）的题数，$b$ 为变错（C 答对、N 答错）的题数，$n = b + c$，那么假如修改无效，仍然出现至少 $c$ 道题变对的概率为：
 
@@ -56,7 +59,7 @@ $$
 p = \sum_{i=c}^{n} \binom{n}{i} \left(\frac{1}{2}\right)^{n}
 $$
 
-$p < 0.05$ 表示这个结果很难用偶然解释，因此认为修改有效，予以保留；否则撤销。
+$p < 0.05$ 表示这个结果很难用偶然解释，检查通过。
 
 这是针对单次比较的检验。同一个验证集会被反复用来挑选候选，同一来源的题目之间也相互关联，所以整个优化过程的误报率会高于 5%，最终效果以 test set 为准。
 
@@ -70,16 +73,15 @@ token 消耗和步数只做记录，不参与判断。
 
 ```
 runs/
-├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、是否保留及原因）
+├── history.jsonl          进度：每次尝试一行（版本、基于哪个版本、问题、修改、训练集上变对和变错的题数、是否保留及原因）
 ├── eval_hash.txt          评测方式的哈希，改过评测方式就停止运行
 ├── candidates/<版本>/
 │   ├── harness/           这个版本的 harness 代码
-│   ├── proposal.json      proposer 的产出：问题、修改说明、targets
+│   ├── proposal.json      proposer 的产出：问题、修改说明、预期修好的题
 │   └── proposer.jsonl     proposer 的轨迹
 ├── train/<版本>/
-│   ├── check.json         训练集检查的结论
-│   ├── targets/           重新运行 targets 的结果
-│   ├── scores.jsonl       通过后，整个训练集的结果
+│   ├── check.json         训练集检查的结论，包括变对和变错的题号
+│   ├── scores.jsonl
 │   └── trajectory/
 ├── val/<版本>/
 │   ├── check.json         验证集检查的结论
