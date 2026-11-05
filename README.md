@@ -23,7 +23,7 @@ harness-evolve 是一个极简的 harness 改进循环。
 
    ```
    当前版本 ← 初始 harness
-   for 每一轮（最多 K 轮）:            ▷ 一轮最多保留一个新版本
+   for 每一轮（最多 K 轮）:
        for 每次提交（最多 J 次）:
            proposer 修改 harness，生成新版本
            if 新版本在训练集上没有显著优于当前版本:
@@ -32,11 +32,9 @@ harness-evolve 是一个极简的 harness 改进循环。
                继续下一次提交
            当前版本 ← 新版本
            进入下一轮
-       if 本轮没有新版本被保留:
-           停止
+       if 连续 J 次提交都没有改进:
+           终止
    ```
-
-   同一轮中，proposer 接着上一次提交修改，并知道上一次为什么没通过；可以接续同一个会话。
 
 4. 优化完成后，运行 `python <harness-evolve 目录>/evolve.py final`，在独立的 test set 上比较初始版本和最终版本。
 
