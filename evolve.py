@@ -132,14 +132,19 @@ def attempt(current, new, previous):
 
     # 1. proposer 在 parent 的副本上修改 harness；proposer.jsonl 存在表示这一步已完成
     if not (cand / "proposer.jsonl").exists():
-        for d in (cand, result_dir(new, "train"), result_dir(new, "val")):
+        for d in (result_dir(new, "train"), result_dir(new, "val")):
             shutil.rmtree(d, ignore_errors=True)
-        shutil.copytree(harness_dir(parent), harness_dir(new))
+        (cand / "proposal.json").unlink(missing_ok=True)
+        resumed = harness_dir(new).exists()  # 上次运行中断时，保留已有的修改，和 proposer 会话保持一致
+        if not resumed:
+            shutil.copytree(harness_dir(parent), harness_dir(new))
         prompt = PROMPT.read_text(encoding="utf-8")
         if CFG["task"]:
             prompt += "\n\n" + Path(CFG["task"]).read_text(encoding="utf-8")
         if previous:
             prompt += f"\n\n## 上一次提交\n\n{parent} 没有通过：{previous['reason']}。{new} 是 {parent} 的副本，可以接着修改。"
+        if resumed:
+            prompt += f"\n\n上一次修改 {new} 的运行中断了，{new} 中可能已有部分修改。"
         for k, v in {"{current}": current, "{parent}": parent, "{new}": new, "{name}": Path(CFG["harness"]).name}.items():
             prompt = prompt.replace(k, v)
         user = f"{os.getuid()}:{os.getgid()}" if hasattr(os, "getuid") else "0:0"
@@ -147,6 +152,12 @@ def attempt(current, new, previous):
             cmd = fill(CFG["proposer"], runs=RUNS.resolve(), current=current, new=new, user=user)
             subprocess.run(cmd + [prompt], stdout=f, check=True)
         (cand / "proposer.tmp").replace(cand / "proposer.jsonl")
+
+    # 没有写出 proposal.json 多半是模型服务出错，不计为一次提交；重新运行时重做这一步
+    if not (cand / "proposal.json").exists():
+        (cand / "proposer.jsonl").replace(cand / "proposer.failed.jsonl")
+        sys.exit(f"{new}：proposer 没有写出 proposal.json，可能是模型服务出错。"
+                 f"查看 {cand / 'proposer.failed.jsonl'} 后重新运行")
 
     # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本在训练集上的错题
     if same_tree(harness_dir(parent), harness_dir(new)):

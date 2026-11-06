@@ -5,5 +5,5 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 WORKDIR /workspace
-# proposer 最多运行 1 小时；超时或被中断时 pi 退出，容器随之删除
-ENTRYPOINT ["timeout", "-k", "30", "3600", "pi"]
+# proposer 最多运行 3 小时，防止卡死；超时或被中断时 pi 退出，容器随之删除
+ENTRYPOINT ["timeout", "-k", "30", "10800", "pi"]
