@@ -10,13 +10,13 @@ harness-evolve 是一个极简的 harness 改进循环。
 
 ## 使用
 
-1. 在项目根目录准备以下文件，各自的要求见 [SPEC.md](SPEC.md) 中的对应小节：
-   - [数据集](SPEC.md#数据集)：两个题号文件。
-     - train set（训练集）：Proposer 在上面分析错误案例、改进 harness；Process control 在上面做第一项检查。
-     - validation set（验证集）：Proposer 看不到；Process control 用它判断改进是否真实有效。
+1. 在项目根目录准备以下文件，要求见 [SPEC.md](SPEC.md) 中的对应小节：
+   - [数据集](SPEC.md#数据集)，分为两份：
+     - train set（训练集）：Proposer 用于分析错误案例以便改进 harness。
+     - validation set（验证集）：Process control 用于判断改进是否真实有效。
    - [harness 文件夹](SPEC.md#harness-文件夹)：所有待优化的 harness 代码。
    - [评测脚本](SPEC.md#评测脚本)：在指定题目上评测 harness，保存完整轨迹并计算得分和成本。
-   - [evolve.json](SPEC.md#evolvejson)：配置，包括下文的 S、R、α、K、J。
+   - [evolve.json](SPEC.md#evolvejson)：配置。
 2. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f <harness-evolve 目录>/Dockerfile.pi .`
 3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。
 
