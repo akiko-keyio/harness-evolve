@@ -62,7 +62,7 @@ def harness_dir(version):
     return RUNS / "candidates" / version / Path(CFG["harness"]).name
 
 
-def selected(split):
+def selected_file(split):
     """筛选后保留的题目。"""
     return RUNS / split / "selected_questions.txt"
 
@@ -95,7 +95,7 @@ def evaluate(version, questions, out, n):
 
 def results(version, split):
     """version 在保留的题目上的 R 次评测。"""
-    return evaluate(version, selected(split), RUNS / split / version, CFG["repeats"])
+    return evaluate(version, selected_file(split), RUNS / split / version, CFG["repeats"])
 
 
 def average(runs):
@@ -114,10 +114,8 @@ def p_value(fixed, broken):
     return sum(math.comb(n, i) for i in range(fixed, n + 1)) / 2 ** n if n else 1.0
 
 
-def compare(before, after, qids=None):
-    """逐题比较两个版本的平均分；给出 qids 时只比较这些题。"""
-    if qids is not None:
-        before, after = ([{q: r[q] for q in qids} for r in runs] for runs in (before, after))
+def compare(before, after):
+    """逐题比较两个版本在多次评测中的平均分。"""
     b, a = average(before), average(after)
     fixed = sorted(q for q in b if a[q] > b[q])
     broken = sorted(q for q in b if a[q] < b[q])
@@ -148,18 +146,15 @@ def detection_rates():
     r0 = CFG["repeats"]
     if r0 < 2:  # 至少评测两次才能估计波动
         return
-    noise = []  # 每份数据：（保留题目上每次评测正确题数的方差，全部题数）
+    spread = []  # 每份数据：（两个相同版本各评测一次，保留题目上答对题数之差的标准差；全部题数）
     for split in SPLITS:
         var = sum(m * (1 - m) for m in average(results("v0.0", split)).values()) * r0 / (r0 - 1)
-        noise.append((var, len(read_lines(CFG[split]))))
+        spread.append((math.sqrt(2 * var) or 1e-9, len(read_lines(CFG[split]))))
     z = NormalDist()
 
     def keep(points, r, alpha):  # 全部题目上提升 points 个点的版本，评测 r 次时通过两项检查的概率
-        prob = 1.0
-        for var, total in noise:
-            sd = math.sqrt(2 * var / r) or 1e-9
-            prob *= z.cdf(points * total / 100 / sd - z.inv_cdf(1 - alpha))
-        return prob
+        return math.prod(z.cdf(points * total / 100 / (sd / math.sqrt(r)) - z.inv_cdf(1 - alpha))
+                         for sd, total in spread)
 
     alphas = (0.05, 0.1, 0.2)
     lines = ["按 v0.0 在保留题目上的评测估计。提升按全部题目计算。", "",
@@ -174,11 +169,11 @@ def prepare():
     """筛选出 v0.0 不能稳定答对的题目，再在这些题目上评测 v0.0。"""
     for split in SPLITS:
         screen = evaluate("v0.0", CFG[split], RUNS / split / "v0.0" / "screen", CFG["screen_runs"])
-        if not selected(split).exists():
+        if not selected_file(split).exists():
             kept = [q for q in read_lines(CFG[split]) if not all(r[q]["correct"] for r in screen)]
             if not kept:
                 sys.exit(f"v0.0 在 {split} 的每次评测中都全部答对，没有需要优化的题目")
-            selected(split).write_text("\n".join(kept) + "\n", encoding="utf-8")
+            selected_file(split).write_text("\n".join(kept) + "\n", encoding="utf-8")
         results("v0.0", split)
     detection_rates()
 
@@ -259,20 +254,20 @@ def attempt(current, new, previous):
 
 
 def final(current):
-    """v0.0 和最终版本在全部题目上各评测 R 次并比较，筛掉的题目单独再比较一次。"""
+    """v0.0 和最终版本在全部题目上各评测 R 次并比较，并列出筛掉的题目中变差的题。"""
     if current == "v0.0":
-        return print("没有保留任何修改")
+        print("没有保留任何修改")
+        return
     for split in SPLITS:
         out = RUNS / "final" / split
         before = evaluate("v0.0", CFG[split], out / "v0.0", CFG["repeats"])
         after = evaluate(current, CFG[split], out / current, CFG["repeats"])
-        screened_out = sorted(set(read_lines(CFG[split])) - set(read_lines(selected(split))))
-        check = {"all": compare(before, after),
-                 "screened_out": compare(before, after, screened_out) if screened_out else None}
+        check = compare(before, after)
+        kept = set(read_lines(selected_file(split)))
+        check["broken_screened_out"] = [q for q in check["broken"] if q not in kept]  # 筛掉的题目中平均分降低的
         (out / current / "check.json").write_text(json.dumps(check, indent=2))
-        a = check["all"]
-        print(f"{split}：正确率 {a['before']['acc']} → {a['after']['acc']}，p={a['p_value']}"
-              + (f"；筛掉的题目中 {len(check['screened_out']['broken'])} 题平均分降低" if screened_out else ""))
+        print(f"{split}：正确率 {check['before']['acc']} → {check['after']['acc']}，p={check['p_value']}；"
+              f"筛掉的题目中 {len(check['broken_screened_out'])} 题平均分降低")
 
 
 def main():
