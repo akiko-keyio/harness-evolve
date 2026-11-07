@@ -108,18 +108,22 @@ def mean(rows, key):
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
-def p_value(fixed, broken):
-    """单侧精确符号检验：假如修改无效，至少 fixed 道题平均分升高的概率。"""
-    n = fixed + broken
-    return sum(math.comb(n, i) for i in range(fixed, n + 1)) / 2 ** n if n else 1.0
+def p_value(diffs):
+    """单侧精确检验：假如修改无效，每道题的变化取正、取负的可能性相同；p 是变化之和不小于实际值的概率。"""
+    diffs = [d for d in diffs if d]
+    top = sum(abs(d) for d in diffs)
+    ways = [0] * top + [1] + [0] * top  # ways[top + s]：变化之和为 s 的正负号组合数
+    for d in map(abs, diffs):
+        ways = [x + y for x, y in zip([0] * d + ways[:-d], ways[d:] + [0] * d)]
+    return sum(ways[top + sum(diffs):]) / 2 ** len(diffs)
 
 
 def compare(before, after):
-    """逐题比较两个版本在多次评测中的平均分。"""
-    b, a = average(before), average(after)
-    fixed = sorted(q for q in b if a[q] > b[q])
-    broken = sorted(q for q in b if a[q] < b[q])
-    p = p_value(len(fixed), len(broken))
+    """逐题比较两个版本在 R 次评测中答对的次数。"""
+    diff = {q: sum(r[q]["correct"] for r in after) - sum(r[q]["correct"] for r in before) for q in before[0]}
+    fixed = sorted(q for q, d in diff.items() if d > 0)
+    broken = sorted(q for q, d in diff.items() if d < 0)
+    p = p_value(list(diff.values()))
     result = {"pass": p < CFG["alpha"], "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
     for name, runs in (("before", before), ("after", after)):
         rows = [row for r in runs for row in r.values()]
@@ -161,7 +165,7 @@ def detection_rates():
              "| 被保留的概率 | " + " | ".join(f"α = {a}" for a in alphas) + " |", "|---|" + "---|" * len(alphas)]
     lines += [f"| 提升 {d} 个点，R = {r} | " + " | ".join(f"{keep(d, r, a):.0%}" for a in alphas) + " |"
               for d in (1, 2) for r in range(1, 6)]
-    lines.append("| 没有改进 | " + " | ".join(f"{100 * a * a:g}%" for a in alphas) + " |")
+    lines.append("| 没有改进（上限） | " + " | ".join(f"{100 * a * a:g}%" for a in alphas) + " |")
     (RUNS / "detection_rates.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
