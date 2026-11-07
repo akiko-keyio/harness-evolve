@@ -8,21 +8,28 @@ harness-evolve 是一个极简的 harness 改进循环。
 - **Process control**：驱动 Proposer 提出修改，再评估并决定是否保留的优化流程（`evolve.py`）。
 - **Sandbox**：限制 Proposer 能读写的内容、防止 reward hacking 的隔离环境（`Dockerfile.pi`）。
 
+## 使用
+
+1. 在项目根目录准备以下文件，各自的要求见 [SPEC.md](SPEC.md) 中的对应小节：
+   - [数据集](SPEC.md#数据集)：训练集和验证集的题号文件。训练集用于分析错误、改进 harness，验证集用于判断改进是否真实有效。
+   - [harness 文件夹](SPEC.md#harness-文件夹)：所有待优化的 harness 代码。
+   - [评测脚本](SPEC.md#评测脚本)：在指定题目上评测 harness，保存完整轨迹并计算得分和成本。
+   - [evolve.json](SPEC.md#evolvejson)：配置，包括下文的 S、R、α、K、J。
+2. 构建 proposer 运行的镜像：`docker build -t pi-sandbox -f <harness-evolve 目录>/Dockerfile.pi .`
+3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`。
+
+运行中断后，再次运行会从中断处继续。想在当前提交完成后停下，创建文件 `runs/stop`。
+
 ## 流程
 
-1. 把评测数据集分为三份：
-   1. train set（训练集）：用于分析错误案例以便改进 harness。
-   2. validation set（验证集）：用于判断改进是否真实有效。
-   3. test set（测试集）：用于确认最终效果。
-2. 配置：
-   1. 按[规范](SPEC.md)提供初始 harness 文件夹：包含所有待优化的 harness 代码。
-   2. 按[规范](SPEC.md)提供评测脚本 `eval.py`：在评测数据集上评测 harness，保存完整轨迹并计算得分和成本。
-   3. 用 `Dockerfile.pi` 构建 proposer 运行的镜像。
-   4. 按[规范](SPEC.md)在项目根目录写好配置 `evolve.json`。
-3. 在项目根目录运行 `python <harness-evolve 目录>/evolve.py`：
+`evolve.py` 依次执行：
+
+1. **筛选题目。** 在全部题目上评测非常耗时，而且同一版本每次评测的结果都有波动。因此先筛选出初始版本 v0.0 不能稳定答对的题目：v0.0 在训练集和验证集上各评测 S 次，保留至少答错 1 次的题目，用于之后的评测和优化。
+2. **评测 v0.0。** v0.0 在保留的题目上评测 R 次，作为第一轮比较的对象。
+3. **迭代优化。** 每个新版本都在保留的题目上评测 R 次，按平均分和当前版本比较（见[检查](#检查)）：
 
    ```
-   当前版本 ← 初始 harness
+   当前版本 ← v0.0
    for 每一轮（最多 K 轮）:
        for 每次提交（最多 J 次）:
            proposer 修改 harness，生成新版本
@@ -36,32 +43,50 @@ harness-evolve 是一个极简的 harness 改进循环。
            终止
    ```
 
-4. 优化完成后，运行 `python <harness-evolve 目录>/evolve.py final`，在独立的 test set 上比较初始版本和最终版本。
+4. **最终比较。** v0.0 和最终版本在全部题目上各评测 R 次并比较，同时检查筛掉的题目有没有被改坏。最终效果以验证集上的比较为准。
 
 ## 检查
 
-训练集检查和验证集检查都用单侧精确 McNemar 检验，逐题比较当前版本 C 和新版本 N。记 $c$ 为变对（C 错 N 对）的题数，$b$ 为变错（C 对 N 错）的题数，$n = b + c$：
+训练集检查和验证集检查都在保留的题目上逐题比较当前版本 C 和新版本 N，每道题取 R 次评测的平均分。记 $c$ 为 N 平均分更高的题数，$b$ 为 N 平均分更低的题数，$n = b + c$：
 
 $$
 p = \sum_{i=c}^{n} \binom{n}{i} \left(\frac{1}{2}\right)^{n}
 $$
 
-$p < \alpha$ 时通过，$\alpha$ 在 `evolve.json` 中设置。
+$p < \alpha$ 时通过。比较用的都是重新评测的结果，不用筛选时的结果：筛选时的结果在保留的题目上偏低，在筛掉的题目上偏高。
+
+R 和 α 决定了检查的取舍：R 越大，真实的改进越容易通过，但评测越慢；α 越大，真实的改进越容易通过，但没有改进的版本也越容易通过。没有改进的版本要碰巧通过两项检查，概率为 $\alpha^2$，和数据无关；真实改进被保留的概率则取决于数据。下表是在一个示例数据集上的估计（共 535 题，v0.0 正确率约 80%，约 30% 的题目被保留），提升按全部题目计算：
+
+| 被保留的概率 | α = 0.05 | α = 0.1 | α = 0.2 |
+|---|---|---|---|
+| 提升 1 个点，R = 1 | 7% | 15% | 31% |
+| 提升 1 个点，R = 2 | 17% | 30% | 51% |
+| 提升 1 个点，R = 3 | 28% | 45% | 66% |
+| 提升 2 个点，R = 1 | 40% | 57% | 76% |
+| 提升 2 个点，R = 2 | 77% | 88% | 95% |
+| 提升 2 个点，R = 3 | 93% | 97% | 99% |
+| 没有改进 | 0.25% | 1% | 4% |
+
+评测 v0.0 之后，`runs/detection_rates.md` 会给出按你自己的数据估计的同一张表，可以据此调整 R 和 α。
 
 ## 记录
 
-v0.0 是初始版本，vK.J 是第 K 轮的第 J 次提交。
+v0.0 是初始版本，vK.J 是第 K 轮的第 J 次提交。每次评测的结果（`1/`、`2/`……）包含 `scores.jsonl` 和 `trajectory/`。
 
 ```
 runs/
-├── history.jsonl          每次提交一行：版本、问题、修改、结果
-├── eval_hash.txt          评测方式的哈希
-├── sessions/              proposer 会话（可选）
+├── history.jsonl              每次提交一行：版本、问题、修改、结果
+├── eval_hash.txt              评测方式的哈希
+├── detection_rates.md         按当前数据估计的被保留概率
+├── sessions/                  proposer 会话（可选）
 ├── candidates/<版本>/
-│   ├── harness/           这个版本的 harness 代码
-│   ├── proposal.json      proposer 的提议
-│   └── proposer.jsonl     proposer 的轨迹
-├── train/<版本>/          训练集结果：check.json、scores.jsonl、trajectory/
-├── val/<版本>/            验证集结果：check.json、scores.jsonl、trajectory/
-└── test/<版本>/           测试集结果（final）
+│   ├── harness/               这个版本的 harness 代码
+│   ├── proposal.json          proposer 的提议
+│   └── proposer.jsonl         proposer 的轨迹
+├── train/
+│   ├── selected_questions.txt 保留的题目
+│   ├── v0.0/screen/1..S/      v0.0 在全部题目上的评测，用于筛选
+│   └── <版本>/                在保留的题目上的评测 1..R/，以及和当前版本的比较 check.json
+├── val/                       结构同 train/
+└── final/                     v0.0 和最终版本在全部题目上的评测与比较
 ```

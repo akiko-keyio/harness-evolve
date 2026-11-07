@@ -1,8 +1,8 @@
-"""harness-evolve：让 proposer 修改 harness，只保留在验证集上显著变好的修改。
+"""harness-evolve：让 proposer 修改 harness，只保留在训练集和验证集上都显著变好的修改。
 
 在项目根目录运行，配置读取 evolve.json（见 SPEC.md）：
-  python <harness-evolve 目录>/evolve.py          运行优化；中途停止后再次运行，已完成的步骤不会重做
-  python <harness-evolve 目录>/evolve.py final    在测试集上比较初始版本和当前版本；之后不能再继续优化
+  python <harness-evolve 目录>/evolve.py
+中途停止后再次运行，已完成的步骤不会重做。创建 runs/stop 文件，会在当前提交完成后停下。
 """
 import hashlib
 import json
@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from statistics import NormalDist
 
 try:
     import fcntl
@@ -20,10 +21,12 @@ except ImportError:  # Windows 上没有 fcntl，不加锁
 
 DEFAULTS = {
     "harness": "harness",  # 初始 harness 文件夹
+    "train": None,         # 训练集题号文件，每行一个题号，必填
+    "val": None,           # 验证集题号文件，每行一个题号，必填
     "eval": None,          # 评测命令，必填
     "check": None,         # 候选检查命令，可选
     "task": None,          # 追加给 proposer 的任务说明文件，可选
-    "eval_files": [],      # 影响评测结果的文件，例如评测脚本、数据划分、模型配置
+    "eval_files": [],      # 其他影响评测结果的文件，例如评测脚本、模型配置
     "proposer": [          # proposer 命令：在容器中运行 pi（镜像见 Dockerfile.pi），最后追加 prompt
         "docker", "run", "--rm", "--user", "{user}", "-e", "HOME=/tmp", "-e", "ANTHROPIC_API_KEY",
         "-v", "{runs}/history.jsonl:/workspace/runs/history.jsonl:ro",
@@ -32,11 +35,14 @@ DEFAULTS = {
         "-v", "{runs}/train:/workspace/runs/train:ro",
         "pi-sandbox", "--mode", "json", "--no-session", "--model", "claude-opus-4-6", "-p",
     ],
-    "alpha": 0.05,         # 显著性水平
-    "max_rounds": 5,       # 最多轮数：每保留一次修改，进入下一轮
-    "max_tries": 3,        # 每轮最多提交次数：一轮都没有通过，停止
+    "screen_runs": 3,      # S：筛选题目时，v0.0 在全部题目上评测几次
+    "repeats": 3,          # R：每个版本在保留的题目上评测几次
+    "alpha": 0.2,          # 检查的显著性水平
+    "max_rounds": 5,       # K：最多轮数，每保留一个新版本进入下一轮
+    "max_tries": 5,        # J：每轮最多提交次数，连续 J 次没有改进时停止
 }
 
+SPLITS = ("train", "val")
 RUNS = Path("runs")
 HISTORY = RUNS / "history.jsonl"
 PROMPT = Path(__file__).with_name("proposer.md")
@@ -48,38 +54,53 @@ def fill(template, **values):
     return [str(arg).format(**values) for arg in template]
 
 
+def read_lines(path):
+    return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def harness_dir(version):
     return RUNS / "candidates" / version / Path(CFG["harness"]).name
 
 
-def result_dir(version, split):
-    return RUNS / split / version
+def selected(split):
+    """筛选后保留的题目。"""
+    return RUNS / split / "selected_questions.txt"
 
 
-def read_scores(path):
+def read_scores(path, qids):
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     scores = {r["qid"]: r for r in rows}
-    if not rows or len(scores) != len(rows) or not all(isinstance(q, str) and type(r["correct"]) is int and r["correct"] in (0, 1)
-                                                         for q, r in scores.items()):
-        sys.exit(f"{path} 格式不对：不能为空，题号要是不重复的字符串，correct 要是整数 0 或 1")
+    if len(scores) != len(rows) or scores.keys() != set(qids) or not all(
+            type(r["correct"]) is int and r["correct"] in (0, 1) for r in rows):
+        sys.exit(f"{path} 格式不对：题号文件中的每道题一行、不重复，correct 要是整数 0 或 1")
     return scores
 
 
-def scores(version, split):
-    return read_scores(result_dir(version, split) / "scores.jsonl")
+def evaluate(version, questions, out, n):
+    """在题号文件 questions 中的题目上评测 version n 次，第 i 次的结果放在 out/i/；已有的结果直接读取。"""
+    qids = read_lines(questions)
+    runs = []
+    for i in range(1, n + 1):
+        d = out / str(i)
+        if not (d / "scores.jsonl").exists():
+            d.mkdir(parents=True, exist_ok=True)
+            cmd = fill(CFG["eval"], harness=harness_dir(version), questions=questions,
+                       scores=d / "scores.tmp", trajectory=d / "trajectory")
+            subprocess.run(cmd, check=True, env=ENV)
+            read_scores(d / "scores.tmp", qids)  # 格式正确才作为完整结果保存
+            (d / "scores.tmp").replace(d / "scores.jsonl")
+        runs.append(read_scores(d / "scores.jsonl", qids))
+    return runs
 
 
-def evaluate(version, split):
-    """在整个 split 上评测 version 的 harness；结果已经存在时直接读取。"""
-    d = result_dir(version, split)
-    out, tmp = d / "scores.jsonl", d / "scores.tmp"
-    if not out.exists():
-        d.mkdir(parents=True, exist_ok=True)
-        cmd = fill(CFG["eval"], harness=harness_dir(version), split=split, scores=tmp, trajectory=d / "trajectory")
-        subprocess.run(cmd, check=True, env=ENV)
-        read_scores(tmp)  # 格式正确才作为完整结果保存
-        tmp.replace(out)
-    return scores(version, split)
+def results(version, split):
+    """version 在保留的题目上的 R 次评测。"""
+    return evaluate(version, selected(split), RUNS / split / version, CFG["repeats"])
+
+
+def average(runs):
+    """每道题在多次评测中的平均分。"""
+    return {q: sum(r[q]["correct"] for r in runs) / len(runs) for q in runs[0]}
 
 
 def mean(rows, key):
@@ -87,22 +108,23 @@ def mean(rows, key):
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
-def mcnemar_p(fixed, broken):
-    """单侧精确 McNemar 检验：假如修改无效，至少 fixed 道题变对的概率。"""
+def p_value(fixed, broken):
+    """单侧精确符号检验：假如修改无效，至少 fixed 道题平均分升高的概率。"""
     n = fixed + broken
     return sum(math.comb(n, i) for i in range(fixed, n + 1)) / 2 ** n if n else 1.0
 
 
-def compare(before, after):
-    """在同一组题上逐题比较两个版本。"""
-    if before.keys() != after.keys():
-        sys.exit("两个版本评测的题目不一致")
-    fixed = sorted(q for q in before if before[q]["correct"] == 0 and after[q]["correct"] == 1)
-    broken = sorted(q for q in before if before[q]["correct"] == 1 and after[q]["correct"] == 0)
-    p = mcnemar_p(len(fixed), len(broken))
+def compare(before, after, qids=None):
+    """逐题比较两个版本的平均分；给出 qids 时只比较这些题。"""
+    if qids is not None:
+        before, after = ([{q: r[q] for q in qids} for r in runs] for runs in (before, after))
+    b, a = average(before), average(after)
+    fixed = sorted(q for q in b if a[q] > b[q])
+    broken = sorted(q for q in b if a[q] < b[q])
+    p = p_value(len(fixed), len(broken))
     result = {"pass": p < CFG["alpha"], "p_value": float(f"{p:.3g}"), "fixed": fixed, "broken": broken}
-    for name, rows in (("before", before), ("after", after)):
-        rows = list(rows.values())
+    for name, runs in (("before", before), ("after", after)):
+        rows = [row for r in runs for row in r.values()]
         result[name] = {"acc": round(sum(r["correct"] for r in rows) / len(rows), 4),
                         "tokens": mean(rows, "tokens"), "steps": mean(rows, "steps")}
     return result
@@ -114,11 +136,51 @@ def same_tree(a, b):
 
 
 def eval_hash():
-    """评测命令和 eval_files 内容的哈希。"""
+    """评测命令、题号文件和 eval_files 内容的哈希。"""
     h = hashlib.sha256(json.dumps(CFG["eval"]).encode())
-    for f in CFG["eval_files"]:
+    for f in [CFG["train"], CFG["val"], *CFG["eval_files"]]:
         h.update(f.encode() + Path(f).read_bytes())
     return h.hexdigest()
+
+
+def detection_rates():
+    """用 v0.0 在保留题目上的评测估计结果的波动，写出不同 R 和 α 下版本被保留的概率。"""
+    r0 = CFG["repeats"]
+    if r0 < 2:  # 至少评测两次才能估计波动
+        return
+    noise = []  # 每份数据：（保留题目上每次评测正确题数的方差，全部题数）
+    for split in SPLITS:
+        var = sum(m * (1 - m) for m in average(results("v0.0", split)).values()) * r0 / (r0 - 1)
+        noise.append((var, len(read_lines(CFG[split]))))
+    z = NormalDist()
+
+    def keep(points, r, alpha):  # 全部题目上提升 points 个点的版本，评测 r 次时通过两项检查的概率
+        prob = 1.0
+        for var, total in noise:
+            sd = math.sqrt(2 * var / r) or 1e-9
+            prob *= z.cdf(points * total / 100 / sd - z.inv_cdf(1 - alpha))
+        return prob
+
+    alphas = (0.05, 0.1, 0.2)
+    lines = ["按 v0.0 在保留题目上的评测估计。提升按全部题目计算。", "",
+             "| 被保留的概率 | " + " | ".join(f"α = {a}" for a in alphas) + " |", "|---|" + "---|" * len(alphas)]
+    lines += [f"| 提升 {d} 个点，R = {r} | " + " | ".join(f"{keep(d, r, a):.0%}" for a in alphas) + " |"
+              for d in (1, 2) for r in range(1, 6)]
+    lines.append("| 没有改进 | " + " | ".join(f"{100 * a * a:g}%" for a in alphas) + " |")
+    (RUNS / "detection_rates.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def prepare():
+    """筛选出 v0.0 不能稳定答对的题目，再在这些题目上评测 v0.0。"""
+    for split in SPLITS:
+        screen = evaluate("v0.0", CFG[split], RUNS / split / "v0.0" / "screen", CFG["screen_runs"])
+        if not selected(split).exists():
+            kept = [q for q in read_lines(CFG[split]) if not all(r[q]["correct"] for r in screen)]
+            if not kept:
+                sys.exit(f"v0.0 在 {split} 的每次评测中都全部答对，没有需要优化的题目")
+            selected(split).write_text("\n".join(kept) + "\n", encoding="utf-8")
+        results("v0.0", split)
+    detection_rates()
 
 
 def rejected(reason):
@@ -132,8 +194,8 @@ def attempt(current, new, previous):
 
     # 1. proposer 在 parent 的副本上修改 harness；proposer.jsonl 存在表示这一步已完成
     if not (cand / "proposer.jsonl").exists():
-        for d in (result_dir(new, "train"), result_dir(new, "val")):
-            shutil.rmtree(d, ignore_errors=True)
+        for split in SPLITS:
+            shutil.rmtree(RUNS / split / new, ignore_errors=True)
         (cand / "proposal.json").unlink(missing_ok=True)
         resumed = harness_dir(new).exists()  # 上次运行中断时，保留已有的修改，和 proposer 会话保持一致
         if not resumed:
@@ -159,7 +221,7 @@ def attempt(current, new, previous):
         sys.exit(f"{new}：proposer 没有写出 proposal.json，可能是模型服务出错。"
                  f"查看 {cand / 'proposer.failed.jsonl'} 后重新运行")
 
-    # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本在训练集上的错题
+    # 2. 检查提议：harness 有改动，proposal.json 格式正确，targets 是当前版本没有全部答对的训练题
     if same_tree(harness_dir(parent), harness_dir(new)):
         return {"parent": parent} | rejected("没有修改 harness")
     try:
@@ -171,38 +233,46 @@ def attempt(current, new, previous):
         targets = sorted(set(targets))
     except (OSError, ValueError, KeyError, TypeError):
         return {"parent": parent} | rejected("proposal.json 缺失或格式不对")
-    wrong = {q for q, r in scores(current, "train").items() if r["correct"] == 0}
+    wrong = {q for q, m in average(results(current, "train")).items() if m < 1}
     if not targets or not set(targets) <= wrong:
-        return entry | rejected("targets 要是当前版本在训练集上答错的题号")
+        return entry | rejected("targets 要是当前版本在保留的训练题中没有全部答对的题号")
     if CFG["check"]:
         r = subprocess.run(fill(CFG["check"], harness=harness_dir(new), base=harness_dir(current)),
                            capture_output=True, text=True, env=ENV)
         if r.returncode != 0:
             return entry | rejected("候选检查未通过：" + (r.stdout + r.stderr).strip()[-300:])
 
-    # 3. 训练集检查：在整个训练集上，正确率显著高于当前版本
-    check = compare(scores(current, "train"), evaluate(new, "train"))
-    (result_dir(new, "train") / "check.json").write_text(json.dumps(check, indent=2))
+    # 3. 训练集检查：在保留的训练题上，平均分显著高于当前版本
+    check = compare(results(current, "train"), results(new, "train"))
+    (RUNS / "train" / new / "check.json").write_text(json.dumps(check, indent=2))
     fixed, broken = len(check["fixed"]), len(check["broken"])
     entry["train"] = {"fixed": fixed, "broken": broken}
     if not check["pass"]:
-        return entry | rejected(f"训练集检查未通过：和 {current} 相比变对 {fixed} 题、变错 {broken} 题，p={check['p_value']}")
+        return entry | rejected(f"训练集检查未通过：和 {current} 相比，{fixed} 题平均分升高、{broken} 题降低，p={check['p_value']}")
 
-    # 4. 验证集检查：在验证集上，正确率也显著高于当前版本
-    check = compare(scores(current, "val"), evaluate(new, "val"))
-    (result_dir(new, "val") / "check.json").write_text(json.dumps(check, indent=2))
+    # 4. 验证集检查：在保留的验证题上，平均分也显著高于当前版本
+    check = compare(results(current, "val"), results(new, "val"))
+    (RUNS / "val" / new / "check.json").write_text(json.dumps(check, indent=2))
     if not check["pass"]:
-        return entry | rejected("训练集检查通过，但验证集检查未通过：正确率没有显著提高")
+        return entry | rejected("训练集检查通过，但验证集检查未通过：平均分没有显著提高")
     return entry | {"result": "kept"}
 
 
 def final(current):
-    """在测试集上比较初始版本和当前版本。"""
+    """v0.0 和最终版本在全部题目上各评测 R 次并比较，筛掉的题目单独再比较一次。"""
     if current == "v0.0":
-        sys.exit("没有保留任何修改")
-    check = compare(evaluate("v0.0", "test"), evaluate(current, "test"))
-    (result_dir(current, "test") / "check.json").write_text(json.dumps(check, indent=2))
-    print(json.dumps(check, indent=2))
+        return print("没有保留任何修改")
+    for split in SPLITS:
+        out = RUNS / "final" / split
+        before = evaluate("v0.0", CFG[split], out / "v0.0", CFG["repeats"])
+        after = evaluate(current, CFG[split], out / current, CFG["repeats"])
+        screened_out = sorted(set(read_lines(CFG[split])) - set(read_lines(selected(split))))
+        check = {"all": compare(before, after),
+                 "screened_out": compare(before, after, screened_out) if screened_out else None}
+        (out / current / "check.json").write_text(json.dumps(check, indent=2))
+        a = check["all"]
+        print(f"{split}：正确率 {a['before']['acc']} → {a['after']['acc']}，p={a['p_value']}"
+              + (f"；筛掉的题目中 {len(check['screened_out']['broken'])} 题平均分降低" if screened_out else ""))
 
 
 def main():
@@ -217,8 +287,6 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             sys.exit("另一个 evolve.py 正在使用 runs/")
-    if (RUNS / "test").exists() and sys.argv[1:] != ["final"]:
-        sys.exit("已经在测试集上评测过，不能再继续优化")
 
     # 初始版本：复制 harness 作为 v0.0；评测方式改过时停止，不混用新旧结果
     if not harness_dir("v0.0").exists():
@@ -229,26 +297,25 @@ def main():
     if not (RUNS / "eval_hash.txt").exists():
         (RUNS / "eval_hash.txt").write_text(eval_hash())
     elif (RUNS / "eval_hash.txt").read_text() != eval_hash():
-        sys.exit("评测方式改过了（eval 或 eval_files），旧结果不能再用，请把 runs/ 改名后重新开始")
-    for d in ("train", "val", "sessions"):  # sessions/：proposer 会话文件，可选
-        (RUNS / d).mkdir(exist_ok=True)
+        sys.exit("评测方式改过了（eval、train、val 或 eval_files），旧结果不能再用，请把 runs/ 改名后重新开始")
+    (RUNS / "sessions").mkdir(exist_ok=True)  # proposer 会话文件，可选
     HISTORY.touch()
-    for split in ("train", "val"):
-        evaluate("v0.0", split)
+    prepare()
 
     history = [json.loads(line) for line in HISTORY.read_text(encoding="utf-8").splitlines()]
     while True:
         # 版本号 vK.J：K 是轮次，J 是本轮第几次提交；当前版本是最近一个被保留的版本
         current = next((h["version"] for h in reversed(history) if h["result"] == "kept"), "v0.0")
-        if sys.argv[1:] == ["final"]:
-            return final(current)
         k = int(current[1:].split(".")[0]) + 1
         j = sum(h["version"].startswith(f"v{k}.") for h in history)
         if k > CFG["max_rounds"] or j >= CFG["max_tries"]:
             break
-        if all(r["correct"] for r in scores(current, "train").values()):
-            print("当前版本在训练集上已经全部答对")
+        if all(m == 1 for m in average(results(current, "train")).values()):
+            print("当前版本在保留的训练题上已经全部答对")
             break
+        if (RUNS / "stop").exists():
+            (RUNS / "stop").unlink()
+            sys.exit("看到 runs/stop，已停止；再次运行会接着继续")
         new = f"v{k}.{j + 1}"
         previous = next((h for h in reversed(history) if h["version"].startswith(f"v{k}.")), None)
         entry = {"version": new} | attempt(current, new, previous)
@@ -257,8 +324,8 @@ def main():
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         print(json.dumps(entry, ensure_ascii=False))
 
-    print(f"停止。当前版本 {current} 的 harness 在 {harness_dir(current)}。"
-          f"用 python {sys.argv[0]} final 在测试集上比较 {current} 和 v0.0。")
+    print(f"优化结束。最终版本 {current} 的 harness 在 {harness_dir(current)}。")
+    final(current)
 
 
 if __name__ == "__main__":

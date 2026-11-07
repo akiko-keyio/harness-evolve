@@ -1,22 +1,22 @@
 # 接入规范
 
-接入一个新任务，需要提供评测数据集、初始 harness 文件夹、评测脚本和配置 `evolve.json`，可以另外提供候选检查脚本和任务说明。
+接入一个新任务，需要提供数据集划分、初始 harness 文件夹、评测脚本和配置 `evolve.json`，可以另外提供候选检查脚本和任务说明。
 
 ```
 project/
 ├── harness/        初始 harness 文件夹：所有待优化的 harness 代码
 ├── eval.py         评测脚本
 ├── evolve.json     配置
-├── data/           评测数据集
+├── data/
+│   ├── train.txt   训练集题号，每行一个
+│   └── val.txt     验证集题号，每行一个
 ├── check.py        候选检查脚本（可选）
 └── task.md         任务说明（可选）
 ```
 
-## 评测数据集
+## 数据集
 
-划分为 train、val、test 三份，由评测脚本按 `--split` 读取。来源相同的题（例如同一个视频的多道题）放在同一份里，避免信息从训练集泄露到验证集。
-
-每次提交都要在整个 train 上评测一次，train 越大，每次提交的成本越高。
+把题目分为训练集和验证集，各写一个题号文件，每行一个题号。来源相同的题（例如同一篇文档的多道题）放在同一份里，避免信息从训练集泄露到验证集。
 
 ## harness 文件夹
 
@@ -34,17 +34,17 @@ harness/
 ├── prompts/
 │   └── system.md
 └── tools/
-    └── video.py
+    └── search.py
 ```
 
 ## 评测脚本
 
-评测脚本在指定的 split 上评测指定的 harness，写出得分文件和轨迹。命令在 `evolve.json` 的 `eval` 中给出，可以带任意自己的参数，其中这些占位符会被替换：
+评测脚本在指定的题目上评测指定的 harness，写出得分文件和轨迹。命令在 `evolve.json` 的 `eval` 中给出，可以带任意自己的参数，其中这些占位符会被替换：
 
 | 占位符 | 含义 |
 |---|---|
 | `{harness}` | 要评测的 harness 文件夹 |
-| `{split}` | train、val 或 test |
+| `{questions}` | 题号文件，每行一个题号，只评测这些题 |
 | `{scores}` | 得分文件，每行一道题 |
 | `{trajectory}` | 轨迹目录，每道题一个文件，文件名为题号，例如 `q001.json` |
 
@@ -52,7 +52,7 @@ harness/
 
 | 字段 | 含义 |
 |---|---|
-| `qid` | 题号，字符串，不重复 |
+| `qid` | 题号，和题号文件一致，每道题一行 |
 | `correct` | 是否答对，0 或 1 |
 | `tokens` | 这道题消耗的 token 数 |
 | `steps` | agent 运行的步数 |
@@ -66,7 +66,8 @@ harness/
 - 轨迹文件要包含 proposer 分析错误所需的全部信息：题目、标准答案、agent 的完整消息和工具调用、最终答案。
 - 不要把标准答案传给 harness。
 - harness 出错（包括无法导入）时，这道题记为答错，错误信息写进轨迹，脚本继续运行。评测脚本自身或模型服务出错时以非零状态退出，此时 `evolve.py` 会停止，重新运行时会重做这次评测。
-- 需要逐题续跑时，由评测脚本自己缓存逐题结果。缓存放在 proposer 看不到的地方（不要放在 `runs/train/` 下），轨迹中也不要放 proposer 不该看的内容。
+- 同一个版本会在同一批题上评测多次，每次都要重新运行，不能复用上一次的结果。
+- 需要逐题续跑时，由评测脚本自己缓存这一次评测的逐题结果。缓存放在 proposer 看不到的地方（不要放在 `runs/train/` 下），轨迹中也不要放 proposer 不该看的内容。
 
 示例 `eval.py`：
 
@@ -79,15 +80,15 @@ from pathlib import Path
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--harness", required=True)
-ap.add_argument("--split", choices=["train", "val", "test"], required=True)
+ap.add_argument("--questions", required=True)
 ap.add_argument("--scores", required=True)
 ap.add_argument("--trajectory", required=True)
 args = ap.parse_args()
 
 sys.path.insert(0, str(Path(args.harness).resolve().parent))  # 从指定的 harness 副本导入
-llm = make_llm(model="claude-opus-4-6", temperature=0)  # 你自己的 LLM 客户端：模型和推理参数固定在这里
+llm = make_llm(model="claude-opus-4-6", temperature=1)  # 你自己的 LLM 客户端：模型和推理参数固定在这里
 
-qids = set(json.load(open("data/splits.json"))[args.split])
+qids = set(Path(args.questions).read_text().split())
 questions = [q for q in map(json.loads, open("data/questions.jsonl")) if q["qid"] in qids]
 
 traj_dir = Path(args.trajectory)
@@ -123,25 +124,31 @@ proposer 修改完成后、评测之前运行，用来检查修改范围或运�
 | 键 | 含义 | 默认值 |
 |---|---|---|
 | `harness` | 初始 harness 文件夹 | `"harness"` |
+| `train` | 训练集题号文件 | 必填 |
+| `val` | 验证集题号文件 | 必填 |
 | `eval` | 评测命令，参数数组 | 必填 |
 | `check` | 候选检查命令，参数数组 | 不检查 |
 | `task` | 任务说明文件 | 无 |
-| `eval_files` | 影响评测结果的文件，例如评测脚本、数据划分、模型配置；它们或 `eval` 改过时，`evolve.py` 会停止 | `[]` |
+| `eval_files` | 其他影响评测结果的文件，例如评测脚本、模型配置；它们、题号文件或 `eval` 改过时，`evolve.py` 会停止 | `[]` |
 | `proposer` | proposer 命令，参数数组，最后会追加 prompt | 在容器中运行 pi，见 `evolve.py` |
-| `alpha` | 显著性水平 | `0.05` |
-| `max_rounds` | 最多轮数 K | `5` |
-| `max_tries` | 每轮最多提交次数 J | `3` |
+| `screen_runs` | S：筛选题目时，v0.0 在全部题目上评测几次 | `3` |
+| `repeats` | R：每个版本在保留的题目上评测几次 | `3` |
+| `alpha` | α：检查的显著性水平 | `0.2` |
+| `max_rounds` | K：最多轮数 | `5` |
+| `max_tries` | J：每轮最多提交次数 | `5` |
 
 示例：
 
 ```json
 {
   "harness": "harness",
-  "eval": ["python", "eval.py", "--harness", "{harness}", "--split", "{split}",
+  "train": "data/train.txt",
+  "val": "data/val.txt",
+  "eval": ["python", "eval.py", "--harness", "{harness}", "--questions", "{questions}",
            "--scores", "{scores}", "--trajectory", "{trajectory}"],
   "check": ["python", "check.py", "{harness}", "{base}"],
   "task": "task.md",
-  "eval_files": ["eval.py", "data/splits.json"]
+  "eval_files": ["eval.py"]
 }
 ```
 
